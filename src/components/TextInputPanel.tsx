@@ -7,8 +7,9 @@ const syntaxLines = [
   'Use "Entity: Name" or "WeakEntity: Name".',
   'Use "Relationship: Name" or "IdentifyingRelationship: Name".',
   'Add attributes with "- AttributeName" and markers like "(key)", "(partial-key)", "(multivalued)", "(derived)", "(composite)".',
+  'Relationships can use "- A -> B" or ternary syntax like "- A -> B -> C".',
   'Preferred relationship syntax: "- left participation: total|partial" and "- left arrow: true|false".',
-  'Backward compatibility still supports "- cardinality: 1:N" and compact forms like "- left: total one", "- right: 0..m", or "- right: 0 to m".',
+  'Ternary relationships use named constraints like "- Library: 0 to m"; binary compatibility still supports "- cardinality: 1:N", "- left: total one", "- right: 0..m", or "- right: 0 to m".',
 ];
 
 const notationLines = [
@@ -46,7 +47,7 @@ export function TextInputPanel({ value, onChange }: TextInputPanelProps) {
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={
-          'Relationship: EnrolledIn\n- Student -> Course\n- left participation: total\n- left arrow: false\n- right participation: partial\n- right arrow: true'
+          'Relationship: Borrows\n- Library -> Book -> Member\n- Library: 0 to m\n- Book: 0 to m\n- Member: 0 to m\n- BorrowedOn'
         }
         aria-label="Chen diagram source input"
       />

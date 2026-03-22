@@ -1,36 +1,39 @@
-export const EXAMPLE_INPUT = `Entity: Warehouse
-- WarehouseID (key)
+export const EXAMPLE_INPUT = `Entity: Library
+- LibraryID (key)
 - Name
+- Phone (multivalued)
 
-Entity: Product
-- SKU (key)
-- ProductName
+Entity: Book
+- ISBN (key)
+- Title
+- ShelfLocation (composite)
+    - Room
+    - Aisle
+    - Shelf
 
-Entity: Client
-- ClientID (key)
-- Email
-
-Entity: Employee
-- EmployeeID (key)
+Entity: Member
+- MemberID (key)
 - FullName
+- CurrentFine (derived)
 
-WeakEntity: StockAudit
-- AuditDate (partial-key)
-- Notes
+WeakEntity: Loan
+- LoanNumber (partial-key)
+- DueDate
+- ReturnDate
 
-Relationship: Stores
-- Warehouse -> Product -> Client
-- Warehouse: 0 to m
-- Product: 0 to m
-- Client: 0 to m
-- Quantity
-
-Relationship: Has
-- Warehouse -> Employee
+Relationship: Holds
+- Library -> Book
 - left: 1 to m
-- right: 0 to 1
+- right: 0 to m
 
-IdentifyingRelationship: AuditedIn
-- Warehouse -> StockAudit
+Relationship: Borrows
+- Library -> Book -> Member
+- Library: 0 to m
+- Book: 0 to m
+- Member: 0 to m
+- BorrowedOn
+
+IdentifyingRelationship: Records
+- Member -> Loan
 - left: 0 to m
 - right: 1 to 1`;

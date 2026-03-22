@@ -65,34 +65,35 @@ Because the app is fully client-side, no backend configuration is required for v
 Use sections like this:
 
 ```text
-Entity: Patient
-- PatientID (key)
-- FirstName
-- LastName
+Entity: Library
+- LibraryID (key)
+- Name
 - Phone (multivalued)
-- Age (derived)
 
-Entity: Allergy
-- Name (key)
-- TypicalRemedy
+Entity: Book
+- ISBN (key)
+- Title
 
-WeakEntity: AllergyEvent
-- EventDate (partial-key)
-- ReactionDetails
+Entity: Member
+- MemberID (key)
+- FullName
+- CurrentFine (derived)
 
-Relationship: SuffersFrom
-- Patient -> Allergy
-- left participation: total
-- left arrow: false
-- right participation: partial
-- right arrow: true
+WeakEntity: Loan
+- LoanNumber (partial-key)
+- DueDate
 
-IdentifyingRelationship: ImplicatedIn
-- Allergy -> AllergyEvent
-- left participation: partial
-- left arrow: false
-- right participation: total
-- right arrow: true
+Relationship: Borrows
+- Library -> Book -> Member
+- Library: 0 to m
+- Book: 0 to m
+- Member: 0 to m
+- BorrowedOn
+
+IdentifyingRelationship: Records
+- Member -> Loan
+- left: 0 to m
+- right: 1 to 1
 ```
 
 ## Section headers
