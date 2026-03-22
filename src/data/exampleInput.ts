@@ -13,12 +13,12 @@ Entity: Member
 - FullName
 - Email
 
+Relationship: Registers
+- Library -> Member
+- left: 0..m
+- right: 1..1
+
 Relationship: Stores
 - Library -> Book
 - left: 1..m
-- right: 0..m
-
-Relationship: Borrows
-- Member -> Book
-- left: 0..m
 - right: 0..m`;
