@@ -1,0 +1,354 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap");
+
+:root {
+  color-scheme: light;
+  font-family: "Manrope", "Segoe UI", sans-serif;
+  line-height: 1.5;
+  font-weight: 500;
+  color: #163129;
+  background:
+    radial-gradient(circle at top left, rgba(203, 232, 217, 0.8), transparent 22%),
+    radial-gradient(circle at right 10% bottom 20%, rgba(255, 230, 191, 0.55), transparent 25%),
+    #f4f7f3;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+textarea,
+input {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-shell {
+  max-width: 1600px;
+  margin: 0 auto;
+  padding: 32px;
+}
+
+.hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #4b7267;
+}
+
+.hero h1,
+.panel h2 {
+  margin: 0;
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+}
+
+.hero h1 {
+  font-size: clamp(2.4rem, 5vw, 4.2rem);
+}
+
+.hero__copy,
+.panel__description,
+.status-note,
+.helper-list,
+.error-list li,
+.empty-state p {
+  color: #4f665d;
+}
+
+.hero__copy {
+  max-width: 780px;
+  margin: 12px 0 0;
+  font-size: 1.03rem;
+}
+
+.hero__meta {
+  display: flex;
+  min-width: 280px;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 20px;
+  border: 1px solid rgba(43, 78, 67, 0.1);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 18px 50px rgba(30, 58, 49, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.status-pill,
+.panel__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #deece4;
+  color: #24483f;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.panel__badge--warning {
+  background: #fff0cf;
+  color: #6e4e0f;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 20px;
+  padding: 16px 18px;
+  border: 1px solid rgba(43, 78, 67, 0.1);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 16px 48px rgba(35, 61, 53, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.toolbar__group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.button {
+  border: none;
+  border-radius: 16px;
+  padding: 11px 16px;
+  font-weight: 700;
+  transition:
+    transform 140ms ease,
+    background 140ms ease,
+    opacity 140ms ease;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.button--primary {
+  background: linear-gradient(135deg, #244c42, #2f6d5c);
+  color: #ffffff;
+}
+
+.button--secondary {
+  background: #edf4f0;
+  color: #24483f;
+}
+
+.button--ghost,
+.button--zoom {
+  min-width: 46px;
+  justify-content: center;
+  background: #f4f7f3;
+  color: #24483f;
+}
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.2fr);
+  gap: 20px;
+}
+
+.panel {
+  display: flex;
+  min-height: 720px;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px;
+  border: 1px solid rgba(43, 78, 67, 0.1);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 22px 60px rgba(30, 58, 49, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.panel--preview {
+  min-width: 0;
+}
+
+.panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.editor {
+  width: 100%;
+  min-height: 460px;
+  resize: vertical;
+  padding: 18px;
+  border: 1px solid #d8e4dd;
+  border-radius: 20px;
+  background: linear-gradient(180deg, #fdfefd, #f6faf7);
+  color: #17312a;
+  font-size: 0.98rem;
+  line-height: 1.65;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+
+.editor:focus {
+  outline: 2px solid rgba(44, 107, 91, 0.25);
+  border-color: #8eb6a8;
+}
+
+.helper-card,
+.error-list,
+.error-banner,
+.empty-state {
+  border-radius: 20px;
+}
+
+.helper-card {
+  padding: 18px;
+  background: #f3f8f5;
+  border: 1px solid #dceae2;
+}
+
+.helper-card h3,
+.error-list h3,
+.empty-state h3 {
+  margin: 0 0 10px;
+  font-size: 1rem;
+}
+
+.helper-list,
+.error-list ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.helper-list li + li,
+.error-list li + li {
+  margin-top: 8px;
+}
+
+.error-list {
+  padding: 18px;
+  background: #fff5ef;
+  border: 1px solid #f1d1c0;
+}
+
+.canvas-shell {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.error-banner {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  background: #fff7d8;
+  border: 1px solid #ecd8a0;
+  color: #614914;
+}
+
+.canvas-scroll {
+  position: relative;
+  overflow: auto;
+  min-height: 560px;
+  padding: 16px;
+  border-radius: 24px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.2)),
+    rgba(237, 243, 239, 0.95);
+  border: 1px solid #dce8e1;
+}
+
+.canvas-scroll svg {
+  display: block;
+  border-radius: 20px;
+  box-shadow: 0 20px 46px rgba(39, 68, 58, 0.08);
+}
+
+.empty-state {
+  display: grid;
+  place-items: center;
+  min-height: 560px;
+  padding: 32px;
+  text-align: center;
+  background: rgba(239, 245, 241, 0.85);
+  border: 1px dashed #c9d9d1;
+}
+
+@media (max-width: 1080px) {
+  .app-shell {
+    padding: 20px;
+  }
+
+  .hero,
+  .workspace {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .hero__meta {
+    min-width: 0;
+  }
+
+  .panel {
+    min-height: 640px;
+  }
+}
+
+@media (max-width: 720px) {
+  .toolbar {
+    align-items: stretch;
+  }
+
+  .toolbar__group {
+    width: 100%;
+  }
+
+  .toolbar__group .button {
+    flex: 1;
+  }
+
+  .panel {
+    padding: 20px;
+  }
+
+  .editor {
+    min-height: 380px;
+  }
+}
+
