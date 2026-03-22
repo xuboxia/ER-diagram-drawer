@@ -37,6 +37,7 @@ export function DiagramCanvas({ layout, errors, zoom, svgRef }: DiagramCanvasPro
           width={layout.width * zoom}
           height={layout.height * zoom}
           viewBox={`0 0 ${layout.width} ${layout.height}`}
+          preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="Generated Chen ER diagram"
           style={{ minWidth: layout.width * zoom }}
@@ -45,10 +46,24 @@ export function DiagramCanvas({ layout, errors, zoom, svgRef }: DiagramCanvasPro
             <pattern id="dot-grid" width="28" height="28" patternUnits="userSpaceOnUse">
               <circle cx="1.5" cy="1.5" r="1.5" fill="#d6e4dc" />
             </pattern>
+            <filter id="page-shadow" x="-10%" y="-10%" width="120%" height="120%">
+              <feDropShadow dx="0" dy="16" stdDeviation="18" floodColor="#a9bbb2" floodOpacity="0.18" />
+            </filter>
           </defs>
 
           <rect width={layout.width} height={layout.height} fill="#f3f7f4" />
           <rect width={layout.width} height={layout.height} fill="url(#dot-grid)" opacity="0.8" />
+          <rect
+            x={18}
+            y={18}
+            width={Math.max(0, layout.width - 36)}
+            height={Math.max(0, layout.height - 36)}
+            rx={30}
+            fill="#fffdf8"
+            stroke="#d7e4de"
+            strokeWidth={1.5}
+            filter="url(#page-shadow)"
+          />
 
           {layout.edges.map((edge) => (
             <RelationshipEdge key={edge.id} edge={edge} />
