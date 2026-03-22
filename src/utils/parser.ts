@@ -6,11 +6,12 @@ import type {
   EntityModel,
   ParseIssue,
   ParseResult,
-  RelationshipEndStyle,
+  RelationshipConstraintMax,
+  RelationshipConstraintMin,
+  RelationshipEndConstraint,
   RelationshipKind,
   RelationshipModel,
   RelationshipParticipantModel,
-  RelationshipParticipation,
 } from "../types/diagram";
 
 interface SourceLine {
@@ -31,9 +32,9 @@ type RangeConstraint = "0..1" | "1..1" | "0..M" | "1..M";
 interface RelationshipBlockParseState {
   participantNames: string[];
   participantLineNumber: number | null;
-  participantStylesByName: Map<string, RelationshipEndStyle>;
-  leftParticipation: RelationshipParticipation | null;
-  rightParticipation: RelationshipParticipation | null;
+  participantConstraintsByName: Map<string, RelationshipEndConstraint>;
+  leftParticipation: "partial" | "total" | null;
+  rightParticipation: "partial" | "total" | null;
   leftArrow: boolean | null;
   rightArrow: boolean | null;
   legacyCardinality: CardinalityLabels | null;
@@ -97,7 +98,7 @@ function normalizeLegacyCardinalityPart(raw: string): string | null {
   return null;
 }
 
-function normalizeParticipation(raw: string): RelationshipParticipation | null {
+function normalizeParticipation(raw: string): "partial" | "total" | null {
   const normalized = raw.trim().toLowerCase();
 
   if (normalized === "partial" || normalized === "single") {
@@ -185,24 +186,24 @@ function parseCardinality(raw: string, lineNumber: number, errors: ParseIssue[])
   };
 }
 
-function mapLegacyCardinalityToEndStyle(part: string): RelationshipEndStyle {
+function mapLegacyCardinalityToConstraint(part: string): RelationshipEndConstraint {
   const normalized = part.trim().toUpperCase();
   const isOne = normalized === "1";
 
   return {
-    raw: isOne ? "partial one" : "partial many",
-    participation: "partial",
-    hasArrow: isOne,
+    raw: isOne ? "0..1" : "0..M",
+    min: 0,
+    max: isOne ? "1" : "m",
   };
 }
 
-function mapRangeToEndStyle(range: RangeConstraint): RelationshipEndStyle {
+function mapRangeToConstraint(range: RangeConstraint): RelationshipEndConstraint {
   const [minimum, maximum] = range.split("..");
 
   return {
     raw: range,
-    participation: minimum === "1" ? "total" : "partial",
-    hasArrow: maximum === "1",
+    min: Number(minimum) as RelationshipConstraintMin,
+    max: (maximum === "1" ? "1" : "m") as RelationshipConstraintMax,
   };
 }
 
@@ -232,73 +233,73 @@ function parseRangeConstraint(raw: string): RangeConstraint | null {
   return null;
 }
 
-function parseCompactEndStyle(raw: string): RelationshipEndStyle | null {
+function parseCompactEndConstraint(raw: string): RelationshipEndConstraint | null {
   const normalized = raw.trim().toLowerCase().replace(/\s+/g, " ");
 
   if (normalized === "m" || normalized === "n" || normalized === "many") {
     return {
-      raw: normalized,
-      participation: "partial",
-      hasArrow: false,
+      raw: "0..M",
+      min: 0,
+      max: "m",
     };
   }
 
   if (normalized === "1" || normalized === "one") {
     return {
-      raw: normalized,
-      participation: "partial",
-      hasArrow: true,
+      raw: "0..1",
+      min: 0,
+      max: "1",
     };
   }
 
   if (normalized === "partial many") {
     return {
-      raw: normalized,
-      participation: "partial",
-      hasArrow: false,
+      raw: "0..M",
+      min: 0,
+      max: "m",
     };
   }
 
   if (normalized === "total many") {
     return {
-      raw: normalized,
-      participation: "total",
-      hasArrow: false,
+      raw: "1..M",
+      min: 1,
+      max: "m",
     };
   }
 
   if (normalized === "partial one") {
     return {
-      raw: normalized,
-      participation: "partial",
-      hasArrow: true,
+      raw: "0..1",
+      min: 0,
+      max: "1",
     };
   }
 
   if (normalized === "total one") {
     return {
-      raw: normalized,
-      participation: "total",
-      hasArrow: true,
+      raw: "1..1",
+      min: 1,
+      max: "1",
     };
   }
 
   return null;
 }
 
-function parseParticipantEndStyle(
+function parseParticipantEndConstraint(
   raw: string,
   lineNumber: number,
   label: string,
   errors: ParseIssue[],
-): RelationshipEndStyle | null {
+): RelationshipEndConstraint | null {
   const range = parseRangeConstraint(raw);
 
   if (range) {
-    return mapRangeToEndStyle(range);
+    return mapRangeToConstraint(range);
   }
 
-  const compact = parseCompactEndStyle(raw);
+  const compact = parseCompactEndConstraint(raw);
 
   if (compact) {
     return compact;
@@ -308,9 +309,20 @@ function parseParticipantEndStyle(
     line: lineNumber,
     message:
       `Invalid constraint for "${label}": "${raw}". ` +
-      `Use 0 to 1, 1 to 1, 0 to m, 1 to m, or compact forms like "total one".`,
+      `Use 0..1, 1..1, 0..m, 1..m, or the same values written with "to".`,
   });
   return null;
+}
+
+function deriveConstraintFromLegacyStyle(
+  participation: "partial" | "total",
+  hasArrow: boolean,
+): RelationshipEndConstraint {
+  return {
+    raw: `${participation === "total" ? "1" : "0"}..${hasArrow ? "1" : "M"}`,
+    min: participation === "total" ? 1 : 0,
+    max: hasArrow ? "1" : "m",
+  };
 }
 
 function parseAttributeLine(
@@ -534,11 +546,11 @@ function parseParticipantChain(line: SourceLine): string[] | null {
   return parts;
 }
 
-function defaultManyStyle(): RelationshipEndStyle {
+function defaultManyConstraint(): RelationshipEndConstraint {
   return {
     raw: "0..M",
-    participation: "partial",
-    hasArrow: false,
+    min: 0,
+    max: "m",
   };
 }
 
@@ -606,12 +618,14 @@ function resolveRelationshipParticipants(
 
     return state.participantNames.map((participantName) => ({
       entity: participantName,
-      endStyle: state.participantStylesByName.get(participantName.toLowerCase()) ?? defaultManyStyle(),
+        endConstraint:
+          state.participantConstraintsByName.get(participantName.toLowerCase()) ??
+          defaultManyConstraint(),
     }));
   }
 
   const [leftParticipant, rightParticipant] = state.participantNames;
-  const hasNamedStyles = state.participantStylesByName.size > 0;
+  const hasNamedStyles = state.participantConstraintsByName.size > 0;
   const hasSideStyles =
     state.leftParticipation !== null ||
     state.rightParticipation !== null ||
@@ -626,8 +640,8 @@ function resolveRelationshipParticipants(
     });
   }
 
-  let leftStyle = state.participantStylesByName.get(leftParticipant.toLowerCase()) ?? null;
-  let rightStyle = state.participantStylesByName.get(rightParticipant.toLowerCase()) ?? null;
+  let leftConstraint = state.participantConstraintsByName.get(leftParticipant.toLowerCase()) ?? null;
+  let rightConstraint = state.participantConstraintsByName.get(rightParticipant.toLowerCase()) ?? null;
 
   if (!hasNamedStyles) {
     if (state.leftParticipation !== null || state.leftArrow !== null) {
@@ -637,11 +651,10 @@ function resolveRelationshipParticipants(
           message: `Relationship "${name}" must define both "left participation" and "left arrow".`,
         });
       } else {
-        leftStyle = {
-          raw: `${state.leftParticipation} ${state.leftArrow ? "one" : "many"}`,
-          participation: state.leftParticipation,
-          hasArrow: state.leftArrow,
-        };
+        leftConstraint = deriveConstraintFromLegacyStyle(
+          state.leftParticipation,
+          state.leftArrow,
+        );
       }
     }
 
@@ -652,23 +665,24 @@ function resolveRelationshipParticipants(
           message: `Relationship "${name}" must define both "right participation" and "right arrow".`,
         });
       } else {
-        rightStyle = {
-          raw: `${state.rightParticipation} ${state.rightArrow ? "one" : "many"}`,
-          participation: state.rightParticipation,
-          hasArrow: state.rightArrow,
-        };
+        rightConstraint = deriveConstraintFromLegacyStyle(
+          state.rightParticipation,
+          state.rightArrow,
+        );
       }
     }
   }
 
-  if (!leftStyle || !rightStyle) {
+  if (!leftConstraint || !rightConstraint) {
     if (state.legacyCardinality) {
-      leftStyle = leftStyle ?? mapLegacyCardinalityToEndStyle(state.legacyCardinality.source);
-      rightStyle = rightStyle ?? mapLegacyCardinalityToEndStyle(state.legacyCardinality.target);
+      leftConstraint =
+        leftConstraint ?? mapLegacyCardinalityToConstraint(state.legacyCardinality.source);
+      rightConstraint =
+        rightConstraint ?? mapLegacyCardinalityToConstraint(state.legacyCardinality.target);
     }
   }
 
-  if (!leftStyle || !rightStyle) {
+  if (!leftConstraint || !rightConstraint) {
     errors.push({
       line: lineNumber,
       message:
@@ -679,11 +693,11 @@ function resolveRelationshipParticipants(
   return [
     {
       entity: leftParticipant,
-      endStyle: leftStyle ?? defaultManyStyle(),
+      endConstraint: leftConstraint ?? defaultManyConstraint(),
     },
     {
       entity: rightParticipant,
-      endStyle: rightStyle ?? defaultManyStyle(),
+      endConstraint: rightConstraint ?? defaultManyConstraint(),
     },
   ];
 }
@@ -699,7 +713,7 @@ function parseRelationshipBlock(
   const state: RelationshipBlockParseState = {
     participantNames: [],
     participantLineNumber: null,
-    participantStylesByName: new Map<string, RelationshipEndStyle>(),
+    participantConstraintsByName: new Map<string, RelationshipEndConstraint>(),
     leftParticipation: null,
     rightParticipation: null,
     leftArrow: null,
@@ -791,13 +805,18 @@ function parseRelationshipBlock(
     const sideMatch = line.trimmed.match(/^-\s*(left|right)\s*:\s*(.+)$/i);
     if (sideMatch) {
       const side = sideMatch[1].toLowerCase() as "left" | "right";
-      const parsed = parseParticipantEndStyle(sideMatch[2].trim(), line.lineNumber, side, errors);
+      const parsed = parseParticipantEndConstraint(
+        sideMatch[2].trim(),
+        line.lineNumber,
+        side,
+        errors,
+      );
 
       if (parsed) {
         if (side === "left") {
-          state.participantStylesByName.set("__left__", parsed);
+          state.participantConstraintsByName.set("__left__", parsed);
         } else {
-          state.participantStylesByName.set("__right__", parsed);
+          state.participantConstraintsByName.set("__right__", parsed);
         }
       }
 
@@ -808,7 +827,7 @@ function parseRelationshipBlock(
     const namedMatch = line.trimmed.match(/^-\s*([^:]+?)\s*:\s*(.+)$/);
     if (namedMatch) {
       const participantName = namedMatch[1].trim();
-      const parsed = parseParticipantEndStyle(
+      const parsed = parseParticipantEndConstraint(
         namedMatch[2].trim(),
         line.lineNumber,
         participantName,
@@ -816,7 +835,7 @@ function parseRelationshipBlock(
       );
 
       if (parsed) {
-        state.participantStylesByName.set(participantName.toLowerCase(), parsed);
+        state.participantConstraintsByName.set(participantName.toLowerCase(), parsed);
       }
 
       currentIndex += 1;
@@ -882,19 +901,28 @@ function parseRelationshipBlock(
     currentIndex += 1;
   }
 
-  if (state.participantStylesByName.has("__left__") || state.participantStylesByName.has("__right__")) {
-    const leftNamed = state.participantStylesByName.get("__left__") ?? null;
-    const rightNamed = state.participantStylesByName.get("__right__") ?? null;
-    state.participantStylesByName.delete("__left__");
-    state.participantStylesByName.delete("__right__");
+  if (
+    state.participantConstraintsByName.has("__left__") ||
+    state.participantConstraintsByName.has("__right__")
+  ) {
+    const leftNamed = state.participantConstraintsByName.get("__left__") ?? null;
+    const rightNamed = state.participantConstraintsByName.get("__right__") ?? null;
+    state.participantConstraintsByName.delete("__left__");
+    state.participantConstraintsByName.delete("__right__");
 
     if (state.participantNames.length === 2) {
       if (leftNamed) {
-        state.participantStylesByName.set(state.participantNames[0].toLowerCase(), leftNamed);
+        state.participantConstraintsByName.set(
+          state.participantNames[0].toLowerCase(),
+          leftNamed,
+        );
       }
 
       if (rightNamed) {
-        state.participantStylesByName.set(state.participantNames[1].toLowerCase(), rightNamed);
+        state.participantConstraintsByName.set(
+          state.participantNames[1].toLowerCase(),
+          rightNamed,
+        );
       }
     } else {
       errors.push({

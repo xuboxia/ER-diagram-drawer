@@ -15,14 +15,10 @@ Entity: Member
 
 Relationship: Stores
 - Library -> Book
-- left participation: total
-- left arrow: false
-- right participation: partial
-- right arrow: false
+- left: 1..m
+- right: 0..m
 
 Relationship: Borrows
 - Member -> Book
-- left participation: partial
-- left arrow: false
-- right participation: partial
-- right arrow: false`;
+- left: 0..m
+- right: 0..m`;

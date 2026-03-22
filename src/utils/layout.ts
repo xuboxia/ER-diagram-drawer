@@ -625,7 +625,7 @@ async function runPrimaryLayout(
       (participant) => ({
         entityId: entityIdsByName.get(participant.entity.toLowerCase()) ?? participant.entity,
         entityName: participant.entity,
-        endStyle: participant.endStyle,
+        endConstraint: participant.endConstraint,
       }),
     );
 
@@ -794,8 +794,7 @@ function createPrimaryEdges(
         x2: routedPath[routedPath.length - 1].x,
         y2: routedPath[routedPath.length - 1].y,
         points: routedPath,
-        participation: participant.endStyle.participation,
-        hasArrow: participant.endStyle.hasArrow,
+        endConstraint: participant.endConstraint,
       });
     });
   });
@@ -1299,14 +1298,14 @@ function getEdgeBounds(edge: LayoutEdge): LayoutRect {
   let minY = Math.min(...yValues);
   let maxY = Math.max(...yValues);
 
-  if (edge.kind === "entity-relationship" && edge.participation === "total") {
+  if (edge.kind === "entity-relationship" && edge.endConstraint?.min === 1) {
     minX -= RELATIONSHIP_DOUBLE_LINE_OFFSET;
     maxX += RELATIONSHIP_DOUBLE_LINE_OFFSET;
     minY -= RELATIONSHIP_DOUBLE_LINE_OFFSET;
     maxY += RELATIONSHIP_DOUBLE_LINE_OFFSET;
   }
 
-  if (edge.kind === "entity-relationship" && edge.hasArrow) {
+  if (edge.kind === "entity-relationship" && edge.endConstraint?.max === "1") {
     minX -= RELATIONSHIP_ARROW_LENGTH + RELATIONSHIP_ARROW_WIDTH;
     maxX += RELATIONSHIP_ARROW_LENGTH + RELATIONSHIP_ARROW_WIDTH;
     minY -= RELATIONSHIP_ARROW_LENGTH + RELATIONSHIP_ARROW_WIDTH;

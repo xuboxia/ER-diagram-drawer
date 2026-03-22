@@ -85,33 +85,35 @@ function toPolylinePoints(points: LayoutPoint[]): string {
 }
 
 function getArrowPoints(points: LayoutPoint[]): string {
-  const start = points[0];
-  const next = points.find(
-    (point, index) =>
-      index > 0 &&
-      (Math.abs(point.x - start.x) > 0.1 || Math.abs(point.y - start.y) > 0.1),
-  );
+  const end = points[points.length - 1];
+  const previous = [...points]
+    .reverse()
+    .find(
+      (point, index) =>
+        index > 0 &&
+        (Math.abs(point.x - end.x) > 0.1 || Math.abs(point.y - end.y) > 0.1),
+    );
 
-  if (!next) {
-    return `${start.x},${start.y}`;
+  if (!previous) {
+    return `${end.x},${end.y}`;
   }
 
-  const dx = next.x - start.x;
-  const dy = next.y - start.y;
+  const dx = end.x - previous.x;
+  const dy = end.y - previous.y;
   const length = Math.hypot(dx, dy) || 1;
   const unitX = dx / length;
   const unitY = dy / length;
   const normalX = -unitY;
   const normalY = unitX;
 
-  const baseCenterX = start.x + unitX * ARROW_LENGTH;
-  const baseCenterY = start.y + unitY * ARROW_LENGTH;
+  const baseCenterX = end.x - unitX * ARROW_LENGTH;
+  const baseCenterY = end.y - unitY * ARROW_LENGTH;
   const leftX = baseCenterX + normalX * (ARROW_WIDTH / 2);
   const leftY = baseCenterY + normalY * (ARROW_WIDTH / 2);
   const rightX = baseCenterX - normalX * (ARROW_WIDTH / 2);
   const rightY = baseCenterY - normalY * (ARROW_WIDTH / 2);
 
-  return `${start.x},${start.y} ${leftX},${leftY} ${rightX},${rightY}`;
+  return `${end.x},${end.y} ${leftX},${leftY} ${rightX},${rightY}`;
 }
 
 function renderPath(edge: LayoutEdge, suffix: string, offset = 0) {
@@ -132,8 +134,8 @@ function renderPath(edge: LayoutEdge, suffix: string, offset = 0) {
 
 export function RelationshipEdge({ edge }: RelationshipEdgeProps) {
   const isRelationshipEdge = edge.kind === "entity-relationship";
-  const isDouble = isRelationshipEdge && edge.participation === "total";
-  const hasArrow = isRelationshipEdge && edge.hasArrow;
+  const isDouble = isRelationshipEdge && edge.endConstraint?.min === 1;
+  const hasArrow = isRelationshipEdge && edge.endConstraint?.max === "1";
   const points = getEdgePoints(edge);
 
   return (

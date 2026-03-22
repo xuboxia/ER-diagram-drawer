@@ -1,6 +1,7 @@
 export type EntityKind = "strong" | "weak";
 export type RelationshipKind = "regular" | "identifying";
-export type RelationshipParticipation = "partial" | "total";
+export type RelationshipConstraintMin = 0 | 1;
+export type RelationshipConstraintMax = "1" | "m";
 
 export interface AttributeModel {
   id: string;
@@ -26,15 +27,15 @@ export interface CardinalityLabels {
   target: string;
 }
 
-export interface RelationshipEndStyle {
+export interface RelationshipEndConstraint {
   raw: string;
-  participation: RelationshipParticipation;
-  hasArrow: boolean;
+  min: RelationshipConstraintMin;
+  max: RelationshipConstraintMax;
 }
 
 export interface RelationshipParticipantModel {
   entity: string;
-  endStyle: RelationshipEndStyle;
+  endConstraint: RelationshipEndConstraint;
 }
 
 export interface RelationshipModel {
@@ -92,7 +93,7 @@ export interface PositionedAttribute {
 export interface PositionedRelationshipParticipant {
   entityId: string;
   entityName: string;
-  endStyle: RelationshipEndStyle;
+  endConstraint: RelationshipEndConstraint;
 }
 
 export interface PositionedRelationship {
@@ -127,8 +128,7 @@ export interface LayoutEdge {
   label?: string;
   labelX?: number;
   labelY?: number;
-  participation?: RelationshipParticipation;
-  hasArrow?: boolean;
+  endConstraint?: RelationshipEndConstraint;
 }
 
 export interface DiagramLayout {
