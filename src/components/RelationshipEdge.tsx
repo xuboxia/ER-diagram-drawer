@@ -260,41 +260,6 @@ function toPolylinePoints(points: LayoutPoint[]): string {
   return points.map((point) => `${point.x},${point.y}`).join(" ");
 }
 
-function toSmoothPath(points: LayoutPoint[]): string {
-  if (points.length === 0) {
-    return "";
-  }
-
-  if (points.length === 1) {
-    return `M ${points[0].x} ${points[0].y}`;
-  }
-
-  if (points.length === 2) {
-    return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
-  }
-
-  let path = `M ${points[0].x} ${points[0].y}`;
-
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const previous = points[index - 1] ?? points[index];
-    const current = points[index];
-    const next = points[index + 1];
-    const afterNext = points[index + 2] ?? next;
-    const controlPointOne = {
-      x: current.x + (next.x - previous.x) / 6,
-      y: current.y + (next.y - previous.y) / 6,
-    };
-    const controlPointTwo = {
-      x: next.x - (afterNext.x - current.x) / 6,
-      y: next.y - (afterNext.y - current.y) / 6,
-    };
-
-    path += ` C ${controlPointOne.x} ${controlPointOne.y}, ${controlPointTwo.x} ${controlPointTwo.y}, ${next.x} ${next.y}`;
-  }
-
-  return path;
-}
-
 function getArrowPoints(points: LayoutPoint[]): string {
   const end = points[points.length - 1];
   const previous = [...points]
@@ -329,9 +294,9 @@ function getArrowPoints(points: LayoutPoint[]): string {
 
 function renderPath(points: LayoutPoint[], edgeId: string, suffix: string) {
   return (
-    <path
+    <polyline
       key={`${edgeId}-${suffix}`}
-      d={toSmoothPath(points)}
+      points={toPolylinePoints(points)}
       fill="none"
       stroke="#5a7a70"
       strokeWidth={2}
