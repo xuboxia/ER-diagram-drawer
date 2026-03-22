@@ -4,11 +4,13 @@ interface RelationshipEdgeProps {
   edge: LayoutEdge;
 }
 
-const DOUBLE_LINE_OFFSET = 4;
-const ARROW_LENGTH = 18;
-const ARROW_WIDTH = 14;
-const ARROW_DIAMOND_GAP = 10;
-const DOUBLE_ARROW_MERGE_DISTANCE = 28;
+const DOUBLE_LINE_GAP = 8;
+const DOUBLE_LINE_OFFSET = DOUBLE_LINE_GAP / 2;
+const ARROW_HEAD_LENGTH = 14;
+const ARROW_HEAD_WIDTH = 9;
+const ARROW_TO_DIAMOND_GAP = 14;
+const MERGE_DISTANCE = 30;
+const CENTER_SHAFT_LENGTH = 10;
 
 function getEdgePoints(edge: LayoutEdge): LayoutPoint[] {
   return edge.points && edge.points.length >= 2
@@ -89,6 +91,34 @@ function getPointAtDistance(
   }
 
   return points[points.length - 1];
+}
+
+function getNormalAtDistance(
+  points: LayoutPoint[],
+  cumulativeLengths: number[],
+  distance: number,
+) {
+  if (points.length < 2) {
+    return { x: 0, y: 0 };
+  }
+
+  if (distance <= 0) {
+    return getSegmentNormal(points[0], points[1]);
+  }
+
+  const totalLength = cumulativeLengths[cumulativeLengths.length - 1] ?? 0;
+
+  if (distance >= totalLength) {
+    return getSegmentNormal(points[points.length - 2], points[points.length - 1]);
+  }
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    if (distance <= cumulativeLengths[index + 1]) {
+      return getSegmentNormal(points[index], points[index + 1]);
+    }
+  }
+
+  return getSegmentNormal(points[points.length - 2], points[points.length - 1]);
 }
 
 function simplifyPoints(points: LayoutPoint[]): LayoutPoint[] {
@@ -180,6 +210,52 @@ function offsetPolyline(points: LayoutPoint[], offset: number): LayoutPoint[] {
   });
 }
 
+function buildTaperedOffsetPath(
+  points: LayoutPoint[],
+  offset: number,
+  taperStartDistance: number,
+  taperEndDistance: number,
+): LayoutPoint[] {
+  if (points.length <= 1) {
+    return points;
+  }
+
+  if (taperEndDistance <= taperStartDistance) {
+    return offsetPolyline(slicePolyline(points, 0, taperEndDistance), offset);
+  }
+
+  const cumulativeLengths = getCumulativeLengths(points);
+  const prefix = offsetPolyline(slicePolyline(points, 0, taperStartDistance), offset);
+  const sampleDistances = [taperStartDistance];
+
+  cumulativeLengths.forEach((distance) => {
+    if (distance > taperStartDistance && distance < taperEndDistance) {
+      sampleDistances.push(distance);
+    }
+  });
+
+  sampleDistances.push(
+    taperStartDistance + (taperEndDistance - taperStartDistance) / 2,
+    taperEndDistance,
+  );
+
+  const taperedSegment = sampleDistances
+    .sort((left, right) => left - right)
+    .map((distance) => {
+      const point = getPointAtDistance(points, cumulativeLengths, distance);
+      const normal = getNormalAtDistance(points, cumulativeLengths, distance);
+      const progress = (distance - taperStartDistance) / (taperEndDistance - taperStartDistance);
+      const taperedOffset = offset * Math.max(0, 1 - progress);
+
+      return {
+        x: point.x + normal.x * taperedOffset,
+        y: point.y + normal.y * taperedOffset,
+      };
+    });
+
+  return simplifyPoints([...prefix, ...taperedSegment]);
+}
+
 function toPolylinePoints(points: LayoutPoint[]): string {
   return points.map((point) => `${point.x},${point.y}`).join(" ");
 }
@@ -206,23 +282,21 @@ function getArrowPoints(points: LayoutPoint[]): string {
   const normalX = -unitY;
   const normalY = unitX;
 
-  const baseCenterX = end.x - unitX * ARROW_LENGTH;
-  const baseCenterY = end.y - unitY * ARROW_LENGTH;
-  const leftX = baseCenterX + normalX * (ARROW_WIDTH / 2);
-  const leftY = baseCenterY + normalY * (ARROW_WIDTH / 2);
-  const rightX = baseCenterX - normalX * (ARROW_WIDTH / 2);
-  const rightY = baseCenterY - normalY * (ARROW_WIDTH / 2);
+  const baseCenterX = end.x - unitX * ARROW_HEAD_LENGTH;
+  const baseCenterY = end.y - unitY * ARROW_HEAD_LENGTH;
+  const leftX = baseCenterX + normalX * (ARROW_HEAD_WIDTH / 2);
+  const leftY = baseCenterY + normalY * (ARROW_HEAD_WIDTH / 2);
+  const rightX = baseCenterX - normalX * (ARROW_HEAD_WIDTH / 2);
+  const rightY = baseCenterY - normalY * (ARROW_HEAD_WIDTH / 2);
 
   return `${end.x},${end.y} ${leftX},${leftY} ${rightX},${rightY}`;
 }
 
-function renderPath(points: LayoutPoint[], edgeId: string, suffix: string, offset = 0) {
-  const shiftedPoints = offsetPolyline(points, offset);
-
+function renderPath(points: LayoutPoint[], edgeId: string, suffix: string) {
   return (
     <polyline
       key={`${edgeId}-${suffix}`}
-      points={toPolylinePoints(shiftedPoints)}
+      points={toPolylinePoints(points)}
       fill="none"
       stroke="#5a7a70"
       strokeWidth={2}
@@ -238,41 +312,51 @@ export function RelationshipEdge({ edge }: RelationshipEdgeProps) {
   const hasArrow = isRelationshipEdge && edge.endConstraint?.max === "1";
   const points = getEdgePoints(edge);
   const totalLength = getPolylineLength(points);
-  const arrowTipDistance = Math.max(0, totalLength - ARROW_DIAMOND_GAP);
-  const arrowPath = hasArrow ? slicePolyline(points, 0, arrowTipDistance) : points;
-  const mergeStartDistance = Math.max(
+  const arrowTipDistance = Math.max(0, totalLength - ARROW_TO_DIAMOND_GAP);
+  const arrowShaftStartDistance = Math.max(
     0,
-    arrowTipDistance - DOUBLE_ARROW_MERGE_DISTANCE,
+    arrowTipDistance - ARROW_HEAD_LENGTH - CENTER_SHAFT_LENGTH,
   );
-  const doubleLinePath = isDouble && hasArrow ? slicePolyline(points, 0, mergeStartDistance) : points;
-  const mergedArrowGuide =
-    isDouble && hasArrow
-      ? slicePolyline(points, mergeStartDistance, arrowTipDistance)
-      : arrowPath;
+  const mergeStartDistance = Math.max(0, arrowShaftStartDistance - MERGE_DISTANCE);
+  const arrowGuide = hasArrow ? slicePolyline(points, arrowShaftStartDistance, arrowTipDistance) : points;
+  const singleArrowPath = hasArrow ? slicePolyline(points, 0, arrowTipDistance) : points;
+  const upperMergedPath = buildTaperedOffsetPath(
+    points,
+    DOUBLE_LINE_OFFSET,
+    mergeStartDistance,
+    arrowShaftStartDistance,
+  );
+  const lowerMergedPath = buildTaperedOffsetPath(
+    points,
+    -DOUBLE_LINE_OFFSET,
+    mergeStartDistance,
+    arrowShaftStartDistance,
+  );
 
   return (
     <g>
       {isDouble && hasArrow ? (
         <>
-          {doubleLinePath.length >= 2 ? renderPath(doubleLinePath, edge.id, "upper", DOUBLE_LINE_OFFSET) : null}
-          {doubleLinePath.length >= 2 ? renderPath(doubleLinePath, edge.id, "lower", -DOUBLE_LINE_OFFSET) : null}
-          {mergedArrowGuide.length >= 2 ? renderPath(mergedArrowGuide, edge.id, "merge") : null}
+          {upperMergedPath.length >= 2 ? renderPath(upperMergedPath, edge.id, "upper-merge") : null}
+          {lowerMergedPath.length >= 2 ? renderPath(lowerMergedPath, edge.id, "lower-merge") : null}
+          {arrowGuide.length >= 2 ? renderPath(arrowGuide, edge.id, "center-shaft") : null}
         </>
       ) : isDouble ? (
         <>
-          {renderPath(points, edge.id, "upper", DOUBLE_LINE_OFFSET)}
-          {renderPath(points, edge.id, "lower", -DOUBLE_LINE_OFFSET)}
+          {renderPath(offsetPolyline(points, DOUBLE_LINE_OFFSET), edge.id, "upper")}
+          {renderPath(offsetPolyline(points, -DOUBLE_LINE_OFFSET), edge.id, "lower")}
         </>
       ) : (
-        renderPath(arrowPath, edge.id, "single")
+        renderPath(singleArrowPath, edge.id, "single")
       )}
 
-      {hasArrow && mergedArrowGuide.length >= 2 ? (
+      {hasArrow && arrowGuide.length >= 2 ? (
         <polygon
-          points={getArrowPoints(mergedArrowGuide)}
+          points={getArrowPoints(arrowGuide)}
           fill="#5a7a70"
           stroke="#5a7a70"
           strokeWidth={1}
+          strokeLinejoin="round"
         />
       ) : null}
 
