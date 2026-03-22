@@ -36,12 +36,14 @@ export interface RelationshipEndConstraint {
 export interface RelationshipParticipantModel {
   entity: string;
   endConstraint: RelationshipEndConstraint;
+  roleLabel?: string;
 }
 
 export interface RelationshipModel {
   id: string;
   name: string;
   kind: RelationshipKind;
+  isSelfRelationship: boolean;
   participants: RelationshipParticipantModel[];
   attributes: AttributeModel[];
   legacyCardinality: CardinalityLabels | null;
@@ -94,12 +96,14 @@ export interface PositionedRelationshipParticipant {
   entityId: string;
   entityName: string;
   endConstraint: RelationshipEndConstraint;
+  roleLabel?: string;
 }
 
 export interface PositionedRelationship {
   id: string;
   name: string;
   kind: RelationshipKind;
+  isSelfRelationship: boolean;
   x: number;
   y: number;
   width: number;

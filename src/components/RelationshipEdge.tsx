@@ -275,6 +275,31 @@ export function RelationshipEdge({ edge }: RelationshipEdgeProps) {
           strokeWidth={1}
         />
       ) : null}
+
+      {edge.label && edge.labelX !== undefined && edge.labelY !== undefined ? (
+        <g>
+          <rect
+            x={edge.labelX - Math.max(22, edge.label.length * 4.2)}
+            y={edge.labelY - 11}
+            width={Math.max(44, edge.label.length * 8.4)}
+            height={22}
+            rx={11}
+            fill="#ffffff"
+            stroke="#bfd1c8"
+            strokeWidth={1.25}
+          />
+          <text
+            x={edge.labelX}
+            y={edge.labelY + 4}
+            textAnchor="middle"
+            fontSize={11}
+            fontWeight={700}
+            fill="#285147"
+          >
+            {edge.label}
+          </text>
+        </g>
+      ) : null}
     </g>
   );
 }

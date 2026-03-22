@@ -7,9 +7,10 @@ const syntaxLines = [
   'Use "Entity: Name" or "WeakEntity: Name".',
   'Use "Relationship: Name" or "IdentifyingRelationship: Name".',
   'Add attributes with "- AttributeName" and markers like "(key)", "(partial-key)", "(multivalued)", "(derived)", "(composite)".',
-  'Relationships can use "- A -> B" or ternary syntax like "- A -> B -> C".',
-  'Preferred relationship syntax uses min/max ranges like "- left: 1..m" or "- right: 0 to 1".',
-  'Ternary relationships use named constraints like "- Library: 0..m"; binary compatibility still supports "- cardinality: 1:N" and older left/right participation + arrow lines.',
+  'Relationships can use "- A -> B", self syntax like "- Employee -> Employee", or ternary syntax like "- A -> B -> C".',
+  'Preferred relationship syntax uses min/max ranges like "- left: 1..m", "- right: 0..1", or named ternary constraints like "- Library: 0..m".',
+  'Optional self-relationship role labels are supported with "- left role: Supervisor" and "- right role: Subordinate".',
+  'Backward compatibility still supports "- cardinality: 1:N" and older left/right participation + arrow lines.',
 ];
 
 const notationLines = [
@@ -49,7 +50,7 @@ export function TextInputPanel({ value, onChange }: TextInputPanelProps) {
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={
-          'Relationship: Stores\n- Library -> Book\n- left: 1..m\n- right: 0..m'
+          'Relationship: Supervises\n- Employee -> Employee\n- left: 0..m\n- right: 0..1\n- left role: Supervisor\n- right role: Subordinate'
         }
         aria-label="Chen diagram source input"
       />

@@ -68,32 +68,34 @@ Use sections like this:
 Entity: Library
 - LibraryID (key)
 - Name
-- Phone (multivalued)
+- Address
 
 Entity: Book
 - ISBN (key)
 - Title
+- Genre
 
 Entity: Member
 - MemberID (key)
 - FullName
-- CurrentFine (derived)
+- Email
 
-WeakEntity: Loan
-- LoanNumber (partial-key)
-- DueDate
+Relationship: Registers
+- Library -> Member
+- left: 0..m
+- right: 1..1
 
-Relationship: Borrows
-- Library -> Book -> Member
-- Library: 0 to m
-- Book: 0 to m
-- Member: 0 to m
-- BorrowedOn
+Relationship: Stores
+- Library -> Book
+- left: 1..m
+- right: 0..m
 
-IdentifyingRelationship: Records
-- Member -> Loan
-- left: 0 to m
-- right: 1 to 1
+Relationship: Supervises
+- Member -> Member
+- left: 0..m
+- right: 0..1
+- left role: Supervisor
+- right role: Subordinate
 ```
 
 ## Section headers
@@ -115,28 +117,54 @@ Indented child attributes are attached to the composite attribute above them.
 
 ## Relationship-end syntax
 
-The preferred explicit syntax is:
+The preferred syntax is min/max cardinality at each end:
 
 ```text
-- left participation: partial | total
-- left arrow: true | false
-- right participation: partial | total
-- right arrow: true | false
+- left: 0..1
+- right: 1..m
 ```
 
-Interpretation:
+The parser also accepts the same form written with `to`:
 
-- `participation: partial` = single line
-- `participation: total` = double line
-- `arrow: true` = arrow at that entity end, meaning the one-side / key-constrained side
-- `arrow: false` = no arrow, meaning the many-side
+```text
+- left: 0 to 1
+- right: 1 to m
+```
 
-This allows each relationship end to independently represent:
+These values drive the rendering automatically:
 
-- single line + no arrow = partial many
-- double line + no arrow = total many
-- single line + arrow = partial one
-- double line + arrow = total one
+- `min = 0` -> single line
+- `min = 1` -> double line
+- `max = 1` -> arrow toward the relationship diamond
+- `max = m` -> no arrow
+
+Examples:
+
+- `0..m` = single line + no arrow
+- `1..m` = double line + no arrow
+- `0..1` = single line + arrow
+- `1..1` = double line + arrow
+
+For ternary relationships, use named constraints:
+
+```text
+Relationship: Borrows
+- Library -> Book -> Member
+- Library: 0..m
+- Book: 0..m
+- Member: 0..m
+```
+
+For self relationships, use the normal binary syntax:
+
+```text
+Relationship: Supervises
+- Employee -> Employee
+- left: 0..m
+- right: 0..1
+- left role: Supervisor
+- right role: Subordinate
+```
 
 ## Compact and legacy compatibility
 
@@ -156,20 +184,6 @@ The parser also accepts:
 - right: 1..m
 ```
 
-The parser also accepts the same shorthand written with `to`:
-
-```text
-- left: 0 to 1
-- right: 1 to m
-```
-
-These are mapped internally as:
-
-- `0..1` -> partial + arrow
-- `1..1` -> total + arrow
-- `0..m` -> partial + no arrow
-- `1..m` -> total + no arrow
-
 3. Legacy cardinality syntax:
 
 ```text
@@ -178,9 +192,9 @@ These are mapped internally as:
 
 Legacy mapping:
 
-- `1` side -> arrow
-- `M` / `N` side -> no arrow
-- legacy cardinality does not specify total participation, so both ends default to partial participation
+- `1` side -> `0..1`
+- `M` / `N` side -> `0..m`
+- legacy cardinality does not specify total participation, so both ends default to `min = 0`
 
 ## Visual mapping
 
@@ -199,6 +213,8 @@ Legacy mapping:
 - One-side / key constraint = arrow at that entity end
 - Many-side = no arrow at that entity end
 
+For self relationships, the renderer draws two separate ends from the same entity to the same relationship diamond so the two endpoint constraints remain distinct.
+
 ## One-to-one / one-to-many / many-to-many
 
 - One-to-one: arrows on both ends
@@ -213,6 +229,7 @@ Participation is independent from key constraint, so either end can be partial o
 - Existing `(key)` and `(composite)` attributes still work.
 - Existing `- cardinality: 1:N` style relationships still work.
 - Earlier range-based end syntax like `- left: 0..m` still works.
+- Older `left/right participation` and `left/right arrow` lines are still accepted and converted internally to min/max constraints.
 
 ## Notes
 

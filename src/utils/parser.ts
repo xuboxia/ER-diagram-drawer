@@ -33,10 +33,14 @@ interface RelationshipBlockParseState {
   participantNames: string[];
   participantLineNumber: number | null;
   participantConstraintsByName: Map<string, RelationshipEndConstraint>;
+  leftConstraint: RelationshipEndConstraint | null;
+  rightConstraint: RelationshipEndConstraint | null;
   leftParticipation: "partial" | "total" | null;
   rightParticipation: "partial" | "total" | null;
   leftArrow: boolean | null;
   rightArrow: boolean | null;
+  leftRole: string | null;
+  rightRole: string | null;
   legacyCardinality: CardinalityLabels | null;
   attributes: AttributeModel[];
 }
@@ -559,7 +563,7 @@ function resolveRelationshipParticipants(
   state: RelationshipBlockParseState,
   lineNumber: number,
   errors: ParseIssue[],
-): RelationshipParticipantModel[] {
+): { participants: RelationshipParticipantModel[]; isSelfRelationship: boolean } {
   const participantCount = state.participantNames.length;
 
   if (participantCount === 0) {
@@ -568,7 +572,7 @@ function resolveRelationshipParticipants(
       message:
         `Relationship "${name}" must declare its participants using "- A -> B" or "- A -> B -> C".`,
     });
-    return [];
+    return { participants: [], isSelfRelationship: false };
   }
 
   if (participantCount !== 2 && participantCount !== 3) {
@@ -577,25 +581,32 @@ function resolveRelationshipParticipants(
       message:
         `Relationship "${name}" currently supports only binary or ternary participant lines.`,
     });
-    return [];
+    return { participants: [], isSelfRelationship: false };
   }
 
-  const duplicateParticipant = state.participantNames.find(
+  const duplicateParticipants = state.participantNames.filter(
     (participant, index) =>
       state.participantNames.findIndex(
         (candidate) => candidate.toLowerCase() === participant.toLowerCase(),
       ) !== index,
   );
+  const isBinarySelfRelationship =
+    participantCount === 2 &&
+    state.participantNames[0].toLowerCase() === state.participantNames[1].toLowerCase();
 
-  if (duplicateParticipant) {
+  if (duplicateParticipants.length > 0 && !isBinarySelfRelationship) {
     errors.push({
       line: state.participantLineNumber ?? lineNumber,
-      message: `Relationship "${name}" cannot list "${duplicateParticipant}" more than once.`,
+      message:
+        `Relationship "${name}" cannot list the same entity more than once ` +
+        `unless it is a binary self relationship like "Employee -> Employee".`,
     });
   }
 
   if (participantCount === 3) {
     if (
+      state.leftConstraint !== null ||
+      state.rightConstraint !== null ||
       state.leftParticipation !== null ||
       state.rightParticipation !== null ||
       state.leftArrow !== null ||
@@ -616,17 +627,22 @@ function resolveRelationshipParticipants(
       });
     }
 
-    return state.participantNames.map((participantName) => ({
-      entity: participantName,
+    return {
+      participants: state.participantNames.map((participantName) => ({
+        entity: participantName,
         endConstraint:
           state.participantConstraintsByName.get(participantName.toLowerCase()) ??
           defaultManyConstraint(),
-    }));
+      })),
+      isSelfRelationship: false,
+    };
   }
 
   const [leftParticipant, rightParticipant] = state.participantNames;
   const hasNamedStyles = state.participantConstraintsByName.size > 0;
   const hasSideStyles =
+    state.leftConstraint !== null ||
+    state.rightConstraint !== null ||
     state.leftParticipation !== null ||
     state.rightParticipation !== null ||
     state.leftArrow !== null ||
@@ -640,8 +656,25 @@ function resolveRelationshipParticipants(
     });
   }
 
-  let leftConstraint = state.participantConstraintsByName.get(leftParticipant.toLowerCase()) ?? null;
-  let rightConstraint = state.participantConstraintsByName.get(rightParticipant.toLowerCase()) ?? null;
+  if (isBinarySelfRelationship && hasNamedStyles) {
+    errors.push({
+      line: state.participantLineNumber ?? lineNumber,
+      message:
+        `Self relationship "${name}" must use "left: ..." and "right: ..." constraints ` +
+        `because named constraints for "${leftParticipant}" would be ambiguous.`,
+    });
+  }
+
+  let leftConstraint =
+    state.leftConstraint ??
+    (!isBinarySelfRelationship
+      ? state.participantConstraintsByName.get(leftParticipant.toLowerCase()) ?? null
+      : null);
+  let rightConstraint =
+    state.rightConstraint ??
+    (!isBinarySelfRelationship
+      ? state.participantConstraintsByName.get(rightParticipant.toLowerCase()) ?? null
+      : null);
 
   if (!hasNamedStyles) {
     if (state.leftParticipation !== null || state.leftArrow !== null) {
@@ -690,16 +723,21 @@ function resolveRelationshipParticipants(
     });
   }
 
-  return [
-    {
-      entity: leftParticipant,
-      endConstraint: leftConstraint ?? defaultManyConstraint(),
-    },
-    {
-      entity: rightParticipant,
-      endConstraint: rightConstraint ?? defaultManyConstraint(),
-    },
-  ];
+  return {
+    participants: [
+      {
+        entity: leftParticipant,
+        endConstraint: leftConstraint ?? defaultManyConstraint(),
+        roleLabel: state.leftRole ?? undefined,
+      },
+      {
+        entity: rightParticipant,
+        endConstraint: rightConstraint ?? defaultManyConstraint(),
+        roleLabel: state.rightRole ?? undefined,
+      },
+    ],
+    isSelfRelationship: isBinarySelfRelationship,
+  };
 }
 
 function parseRelationshipBlock(
@@ -714,10 +752,14 @@ function parseRelationshipBlock(
     participantNames: [],
     participantLineNumber: null,
     participantConstraintsByName: new Map<string, RelationshipEndConstraint>(),
+    leftConstraint: null,
+    rightConstraint: null,
     leftParticipation: null,
     rightParticipation: null,
     leftArrow: null,
     rightArrow: null,
+    leftRole: null,
+    rightRole: null,
     legacyCardinality: null,
     attributes: [],
   };
@@ -802,6 +844,26 @@ function parseRelationshipBlock(
       continue;
     }
 
+    const roleMatch = line.trimmed.match(/^-\s*(left|right)\s+role\s*:\s*(.+)$/i);
+    if (roleMatch) {
+      const side = roleMatch[1].toLowerCase() as "left" | "right";
+      const roleLabel = roleMatch[2].trim();
+
+      if (!roleLabel) {
+        errors.push({
+          line: line.lineNumber,
+          message: `Relationship "${name}" must provide a non-empty ${side} role label.`,
+        });
+      } else if (side === "left") {
+        state.leftRole = roleLabel;
+      } else {
+        state.rightRole = roleLabel;
+      }
+
+      currentIndex += 1;
+      continue;
+    }
+
     const sideMatch = line.trimmed.match(/^-\s*(left|right)\s*:\s*(.+)$/i);
     if (sideMatch) {
       const side = sideMatch[1].toLowerCase() as "left" | "right";
@@ -814,9 +876,9 @@ function parseRelationshipBlock(
 
       if (parsed) {
         if (side === "left") {
-          state.participantConstraintsByName.set("__left__", parsed);
+          state.leftConstraint = parsed;
         } else {
-          state.participantConstraintsByName.set("__right__", parsed);
+          state.rightConstraint = parsed;
         }
       }
 
@@ -901,39 +963,7 @@ function parseRelationshipBlock(
     currentIndex += 1;
   }
 
-  if (
-    state.participantConstraintsByName.has("__left__") ||
-    state.participantConstraintsByName.has("__right__")
-  ) {
-    const leftNamed = state.participantConstraintsByName.get("__left__") ?? null;
-    const rightNamed = state.participantConstraintsByName.get("__right__") ?? null;
-    state.participantConstraintsByName.delete("__left__");
-    state.participantConstraintsByName.delete("__right__");
-
-    if (state.participantNames.length === 2) {
-      if (leftNamed) {
-        state.participantConstraintsByName.set(
-          state.participantNames[0].toLowerCase(),
-          leftNamed,
-        );
-      }
-
-      if (rightNamed) {
-        state.participantConstraintsByName.set(
-          state.participantNames[1].toLowerCase(),
-          rightNamed,
-        );
-      }
-    } else {
-      errors.push({
-        line: state.participantLineNumber ?? 1,
-        message:
-          `Ternary relationship "${name}" must use participant names for constraints, not "left" and "right".`,
-      });
-    }
-  }
-
-  const participants = resolveRelationshipParticipants(
+  const { participants, isSelfRelationship } = resolveRelationshipParticipants(
     name,
     state,
     lines.find((line) => line.trimmed)?.lineNumber ?? 1,
@@ -944,6 +974,7 @@ function parseRelationshipBlock(
     id: relationshipId,
     name,
     kind,
+    isSelfRelationship,
     participants,
     attributes: state.attributes,
     legacyCardinality: state.legacyCardinality,
@@ -1052,14 +1083,21 @@ export function parseDiagram(input: string): ParseResult {
   }
 
   for (const relationship of relationships) {
+    const missingEntities = new Set<string>();
+
     relationship.participants.forEach((participant) => {
       if (!entityNameLookup.has(participant.entity.toLowerCase())) {
-        errors.push({
-          line: relationshipHeaderLines.get(relationship.id) ?? 1,
-          message:
-            `Relationship "${relationship.name}" references missing entity "${participant.entity}".`,
-        });
+        missingEntities.add(participant.entity);
       }
+    });
+
+    missingEntities.forEach((entityName) => {
+      errors.push({
+        line: relationshipHeaderLines.get(relationship.id) ?? 1,
+        message:
+          `Entity "${entityName}" is not defined. Add an 'Entity: ${entityName}' block ` +
+          `or remove the relationship "${relationship.name}".`,
+      });
     });
   }
 

@@ -626,6 +626,7 @@ async function runPrimaryLayout(
         entityId: entityIdsByName.get(participant.entity.toLowerCase()) ?? participant.entity,
         entityName: participant.entity,
         endConstraint: participant.endConstraint,
+        roleLabel: participant.roleLabel,
       }),
     );
 
@@ -633,6 +634,7 @@ async function runPrimaryLayout(
       id: relationship.id,
       name: relationship.name,
       kind: relationship.kind,
+      isSelfRelationship: relationship.isSelfRelationship,
       x: node.x + (node.width ?? RELATIONSHIP_WIDTH) / 2,
       y: node.y + (node.height ?? RELATIONSHIP_HEIGHT) / 2,
       width: RELATIONSHIP_WIDTH,
@@ -748,6 +750,95 @@ function buildEdgePathFromSection(
   return simplifyPolyline([startPoint, ...interior, endPoint]);
 }
 
+function getPolylineMidpoint(points: LayoutPoint[]): LayoutPoint {
+  if (points.length === 0) {
+    return { x: 0, y: 0 };
+  }
+
+  if (points.length === 1) {
+    return points[0];
+  }
+
+  let totalLength = 0;
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    totalLength += Math.hypot(end.x - start.x, end.y - start.y);
+  }
+
+  if (totalLength === 0) {
+    return points[0];
+  }
+
+  const targetLength = totalLength / 2;
+  let traversed = 0;
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    const segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
+
+    if (traversed + segmentLength < targetLength) {
+      traversed += segmentLength;
+      continue;
+    }
+
+    const ratio = (targetLength - traversed) / (segmentLength || 1);
+    return {
+      x: start.x + (end.x - start.x) * ratio,
+      y: start.y + (end.y - start.y) * ratio,
+    };
+  }
+
+  return points[points.length - 1];
+}
+
+function createSelfRelationshipPath(
+  entityShape: CoreShape,
+  relationshipShape: CoreShape,
+  branchIndex: number,
+  branchCount: number,
+): LayoutPoint[] {
+  const horizontalDirection = relationshipShape.x >= entityShape.x ? 1 : -1;
+  const branchOffset = branchIndex - (branchCount - 1) / 2;
+  const verticalOffset = branchOffset * (entityShape.height * 0.65);
+  const entityGuide = {
+    x: entityShape.x + horizontalDirection * (entityShape.width / 2 + 60),
+    y: entityShape.y + verticalOffset,
+  };
+  const relationshipGuide = {
+    x: relationshipShape.x - horizontalDirection * (relationshipShape.width / 2 + 20),
+    y: relationshipShape.y + branchOffset * (relationshipShape.height * 0.45),
+  };
+  const startPoint = getRectBoundaryPoint(
+    entityShape.x,
+    entityShape.y,
+    entityShape.width,
+    entityShape.height,
+    entityGuide.x,
+    entityGuide.y,
+  );
+  const endPoint = getDiamondBoundaryPoint(
+    relationshipShape.x,
+    relationshipShape.y,
+    relationshipShape.width,
+    relationshipShape.height,
+    relationshipGuide.x,
+    relationshipGuide.y,
+  );
+  const elbowX =
+    entityShape.x +
+    horizontalDirection * Math.max(entityShape.width / 2 + 54, Math.abs(relationshipShape.x - entityShape.x) / 2);
+
+  return simplifyPolyline([
+    startPoint,
+    { x: elbowX, y: startPoint.y },
+    { x: elbowX, y: endPoint.y },
+    endPoint,
+  ]);
+}
+
 function createPrimaryEdges(
   relationships: RelationshipModel[],
   positionedRelationships: PositionedRelationship[],
@@ -774,17 +865,27 @@ function createPrimaryEdges(
         return;
       }
 
-      const basePath = buildEdgePathFromSection(
-        participantShape,
-        relationshipShape,
-        edgeSectionsById.get(`${relationship.id}-participant-${participantIndex}`),
-      );
-      const routedPath = routeAroundObstacles(
-        basePath,
-        participantShape.id,
-        relationshipShape.id,
-        shapesById,
-      );
+      const selfParticipantCount = positionedRelationship.isSelfRelationship ? 2 : 1;
+      const selfParticipantIndex = positionedRelationship.isSelfRelationship ? participantIndex : 0;
+      const routedPath =
+        positionedRelationship.isSelfRelationship
+          ? createSelfRelationshipPath(
+              participantShape,
+              relationshipShape,
+              selfParticipantIndex,
+              selfParticipantCount,
+            )
+          : routeAroundObstacles(
+              buildEdgePathFromSection(
+                participantShape,
+                relationshipShape,
+                edgeSectionsById.get(`${relationship.id}-participant-${participantIndex}`),
+              ),
+              participantShape.id,
+              relationshipShape.id,
+              shapesById,
+            );
+      const labelPoint = getPolylineMidpoint(routedPath);
 
       edges.push({
         id: `${relationship.id}-participant-${participantIndex}`,
@@ -795,6 +896,9 @@ function createPrimaryEdges(
         y2: routedPath[routedPath.length - 1].y,
         points: routedPath,
         endConstraint: participant.endConstraint,
+        label: participant.roleLabel,
+        labelX: participant.roleLabel ? labelPoint.x : undefined,
+        labelY: participant.roleLabel ? labelPoint.y - 12 : undefined,
       });
     });
   });
