@@ -1,39 +1,28 @@
 export const EXAMPLE_INPUT = `Entity: Library
 - LibraryID (key)
 - Name
-- Phone (multivalued)
+- Address
 
 Entity: Book
 - ISBN (key)
 - Title
-- ShelfLocation (composite)
-    - Room
-    - Aisle
-    - Shelf
+- Genre
 
 Entity: Member
 - MemberID (key)
 - FullName
-- CurrentFine (derived)
+- Email
 
-WeakEntity: Loan
-- LoanNumber (partial-key)
-- DueDate
-- ReturnDate
-
-Relationship: Holds
+Relationship: Stores
 - Library -> Book
-- left: 1 to m
-- right: 0 to m
+- left participation: total
+- left arrow: false
+- right participation: partial
+- right arrow: false
 
 Relationship: Borrows
-- Library -> Book -> Member
-- Library: 0 to m
-- Book: 0 to m
-- Member: 0 to m
-- BorrowedOn
-
-IdentifyingRelationship: Records
-- Member -> Loan
-- left: 0 to m
-- right: 1 to 1`;
+- Member -> Book
+- left participation: partial
+- left arrow: false
+- right participation: partial
+- right arrow: false`;
