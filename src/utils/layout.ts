@@ -24,10 +24,11 @@ const TARGET_PAGE_ASPECT_RATIO = 1.414;
 const ENTITY_MIN_DISTANCE = 430;
 const ENTITY_SPACING = ENTITY_MIN_DISTANCE;
 const ENTITY_GRID_SPACING_X = ENTITY_SPACING;
-const ENTITY_GRID_SPACING_Y = 320;
-const ENTITY_REPULSION = 128000;
+const ENTITY_GRID_SPACING_Y = 360;
+const ENTITY_REPULSION = 150000;
 const ENTITY_ATTRACTION = 0.0027;
-const ENTITY_CENTER_GRAVITY = 0.0038;
+const ENTITY_CENTER_GRAVITY = 0.0012;
+const ENTITY_SLOT_ATTRACTION = 0.02;
 const ENTITY_FORCE_ITERATIONS = 180;
 const ENTITY_COLLISION_PADDING = 96;
 const ZONE_ATTRACTION = 0.014;
@@ -601,19 +602,28 @@ function computeEntityTargetPositions(
 function createInitialEntityPlacements(
   entities: EntityModel[],
   degreesByEntityId: Map<string, number>,
-  targetPositions: Map<string, LayoutPoint>,
 ): EntityPlacement[] {
   const orderedEntities = [...entities].sort((left, right) => {
     return (degreesByEntityId.get(right.id) ?? 0) - (degreesByEntityId.get(left.id) ?? 0);
   });
+  const columnCount = Math.max(
+    2,
+    Math.ceil(Math.sqrt(Math.max(1, orderedEntities.length) * TARGET_PAGE_ASPECT_RATIO)),
+  );
+  const slots = getGridSlots(
+    orderedEntities.length,
+    columnCount,
+    ENTITY_GRID_SPACING_X,
+    ENTITY_GRID_SPACING_Y,
+  );
 
   return orderedEntities.map((entity, index) => ({
     id: entity.id,
     name: entity.name,
     kind: entity.kind,
     model: entity,
-    x: (targetPositions.get(entity.id)?.x ?? 0) + Math.cos(index * 1.7) * 18,
-    y: (targetPositions.get(entity.id)?.y ?? 0) + Math.sin(index * 1.7) * 14,
+    x: slots[index].x,
+    y: slots[index].y,
     width: ENTITY_WIDTH,
     height: ENTITY_HEIGHT,
   }));
@@ -668,7 +678,7 @@ function runForceLayout(
   entities: EntityPlacement[],
   adjacencyWeights: Map<string, Map<string, number>>,
   degreesByEntityId: Map<string, number>,
-  targetPositions: Map<string, LayoutPoint>,
+  slotTargets: Map<string, LayoutPoint>,
 ): EntityPlacement[] {
   const positions = new Map(
     entities.map((entity) => [entity.id, { x: entity.x, y: entity.y }]),
@@ -755,19 +765,19 @@ function runForceLayout(
     orderedEntities.forEach((entity) => {
       const position = positions.get(entity.id);
       const displacement = displacements.get(entity.id);
-      const targetPosition = targetPositions.get(entity.id);
+      const targetPosition = slotTargets.get(entity.id);
 
       if (!position || !displacement) {
         return;
       }
 
       if (targetPosition) {
-        displacement.x += (targetPosition.x - position.x) * ZONE_ATTRACTION;
-        displacement.y += (targetPosition.y - position.y) * ZONE_ATTRACTION;
+        displacement.x += (targetPosition.x - position.x) * ENTITY_SLOT_ATTRACTION;
+        displacement.y += (targetPosition.y - position.y) * ENTITY_SLOT_ATTRACTION;
       }
 
-      displacement.x -= position.x * ENTITY_CENTER_GRAVITY * 0.35;
-      displacement.y -= position.y * ENTITY_CENTER_GRAVITY * 0.35;
+      displacement.x -= position.x * ENTITY_CENTER_GRAVITY;
+      displacement.y -= position.y * ENTITY_CENTER_GRAVITY;
 
       const length = Math.hypot(displacement.x, displacement.y) || 1;
       const scale = Math.min(temperature, length) / length;
@@ -939,7 +949,6 @@ function nudgeRelationshipPoint(
 function placeRelationships(
   relationshipInfos: CoreRelationshipInfo[],
   entities: EntityPlacement[],
-  relationshipZones: Map<string, LayoutPoint>,
 ): PositionedRelationship[] {
   const entityById = new Map(entities.map((entity) => [entity.id, entity]));
   const positionedRelationships: PositionedRelationship[] = [];
@@ -954,7 +963,6 @@ function placeRelationships(
     const participantEntities = relationshipInfo.participantEntityIds
       .map((entityId) => entityById.get(entityId))
       .filter((entity): entity is EntityPlacement => entity !== undefined);
-    const zoneAnchor = relationshipZones.get(relationshipInfo.model.id) ?? { x: 0, y: 0 };
     let position: LayoutPoint = { x: 0, y: 0 };
 
     if (relationshipInfo.model.isSelfRelationship && participantEntities[0]) {
@@ -988,18 +996,7 @@ function placeRelationships(
         Math.abs(offset),
         angle + (offset >= 0 ? 0 : Math.PI),
       );
-      const zoneDx = zoneAnchor.x - midpoint.x;
-      const zoneDy = zoneAnchor.y - midpoint.y;
-      const zoneDistance = Math.hypot(zoneDx, zoneDy) || 1;
-      const zoneScale = Math.min(1, BINARY_CLUSTER_RADIUS / zoneDistance);
-      const clampedZone = {
-        x: midpoint.x + zoneDx * zoneScale,
-        y: midpoint.y + zoneDy * zoneScale,
-      };
-      position = {
-        x: offsetPoint.x * 0.78 + clampedZone.x * 0.22,
-        y: offsetPoint.y * 0.78 + clampedZone.y * 0.22,
-      };
+      position = offsetPoint;
     } else {
       const centroid = {
         x: sum(participantEntities.map((entity) => entity.x)) / Math.max(1, participantEntities.length),
@@ -1010,18 +1007,33 @@ function placeRelationships(
         total > 1
           ? getBalancedOffset(index, RELATIONSHIP_TRIPLE_OFFSET)
           : RELATIONSHIP_OFFSET * 0.65;
-      const zoneDx = zoneAnchor.x - centroid.x;
-      const zoneDy = zoneAnchor.y - centroid.y;
-      const zoneDistance = Math.hypot(zoneDx, zoneDy) || 1;
-      const zoneScale = Math.min(1, TERNARY_CLUSTER_RADIUS / zoneDistance);
-      const clampedZone = {
-        x: centroid.x + zoneDx * zoneScale,
-        y: centroid.y + zoneDy * zoneScale,
-      };
-      const openDirection = angleBetween(centroid, clampedZone);
+      const openDirections = [
+        -Math.PI / 2,
+        0,
+        Math.PI / 2,
+        Math.PI,
+        -Math.PI / 4,
+        Math.PI / 4,
+      ];
+      const openDirection = openDirections
+        .map((candidateAngle) => {
+          const probe = polarPoint(centroid.x, centroid.y, TERNARY_CLUSTER_RADIUS * 0.55, candidateAngle);
+          const clearance = Math.min(
+            ...[
+              ...entities.map((entity) => Math.hypot(entity.x - probe.x, entity.y - probe.y)),
+              ...positionedRelationships.map((relationship) =>
+                Math.hypot(relationship.x - probe.x, relationship.y - probe.y),
+              ),
+              Infinity,
+            ],
+          );
+
+          return { candidateAngle, clearance };
+        })
+        .sort((left, right) => right.clearance - left.clearance)[0].candidateAngle;
       position = {
-        x: centroid.x * 0.68 + clampedZone.x * 0.32 + Math.cos(openDirection) * offset,
-        y: centroid.y * 0.68 + clampedZone.y * 0.32 + Math.sin(openDirection) * offset,
+        x: centroid.x + Math.cos(openDirection) * offset,
+        y: centroid.y + Math.sin(openDirection) * offset,
       };
     }
 
@@ -1214,38 +1226,35 @@ function placeCandidateAttribute(
   );
 }
 
-function getSideCandidates(
+function getOwnerRadialBaseAngle(ownerShape: CoreShape, neighborPoints: LayoutPoint[]): number {
+  if (neighborPoints.length === 0) {
+    return -Math.PI / 2;
+  }
+
+  const averageNeighbor = {
+    x: sum(neighborPoints.map((point) => point.x)) / neighborPoints.length,
+    y: sum(neighborPoints.map((point) => point.y)) / neighborPoints.length,
+  };
+
+  return normalizeAngle(angleBetween({ x: ownerShape.x, y: ownerShape.y }, averageNeighbor) + Math.PI);
+}
+
+function getRadialCandidates(
   ownerShape: CoreShape,
-  side: "left" | "right" | "bottom" | "top",
   slotIndex: number,
+  ringIndex: number,
+  ringCount: number,
+  baseAngle: number,
 ): LayoutPoint[] {
   const candidates: LayoutPoint[] = [];
+  const angleStep = (Math.PI * 2) / Math.max(1, ringCount);
+  const angle = baseAngle + slotIndex * angleStep + ringIndex * 0.18;
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const outward = attempt * 26;
-
-    if (side === "top") {
-      candidates.push({
-        x: ownerShape.x + getBalancedOffset(slotIndex, ATTRIBUTE_SPACING),
-        y: ownerShape.y - KEY_ATTRIBUTE_Y_OFFSET - outward,
-      });
-      continue;
-    }
-
-    if (side === "bottom") {
-      candidates.push({
-        x: ownerShape.x + getBalancedOffset(slotIndex, ATTRIBUTE_SPACING),
-        y: ownerShape.y + BOTTOM_ATTRIBUTE_Y_OFFSET + outward,
-      });
-      continue;
-    }
-
+    const radius = ATTRIBUTE_RADIUS + ringIndex * ATTRIBUTE_RING_STEP + attempt * 20;
     candidates.push({
-      x:
-        ownerShape.x +
-        (side === "left" ? -REGULAR_ATTRIBUTE_SIDE_OFFSET : REGULAR_ATTRIBUTE_SIDE_OFFSET) +
-        (side === "left" ? -outward : outward),
-      y: ownerShape.y + getBalancedOffset(slotIndex, ATTRIBUTE_SPACING),
+      x: ownerShape.x + Math.cos(angle) * radius,
+      y: ownerShape.y + Math.sin(angle) * radius,
     });
   }
 
@@ -1268,51 +1277,39 @@ function placeRootAttributes(
   }
 
   const { keyAttributes, regularAttributes, compositeAttributes } = classifyRootAttributes(attributes);
-  const averageNeighbor = neighborPoints.length > 0
-    ? {
-        x: sum(neighborPoints.map((point) => point.x)) / neighborPoints.length,
-        y: sum(neighborPoints.map((point) => point.y)) / neighborPoints.length,
-      }
-    : { x: ownerShape.x, y: ownerShape.y };
-  const trafficBias = {
-    x: averageNeighbor.x - ownerShape.x,
-    y: averageNeighbor.y - ownerShape.y,
-  };
-  const preferLeft = trafficBias.x >= 0;
-  const regularSlots: Array<"left" | "right" | "bottom"> = [];
+  const orderedAttributes = [
+    ...keyAttributes,
+    ...regularAttributes,
+    ...compositeAttributes,
+  ];
+  const baseAngle = getOwnerRadialBaseAngle(ownerShape, neighborPoints);
 
-  regularAttributes.forEach((_, index) => {
-    if (index % 3 === 2) {
-      regularSlots.push("bottom");
-    } else {
-      regularSlots.push((index + (preferLeft ? 0 : 1)) % 2 === 0 ? "left" : "right");
-    }
-  });
-
-  const counts = {
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-  };
-  const placeAttribute = (
-    attribute: AttributeModel,
-    side: "left" | "right" | "bottom" | "top",
-    bendAmount: number,
-  ) => {
+  const placeAttribute = (attribute: AttributeModel, index: number) => {
+    const ringIndex = Math.floor(index / ATTRIBUTE_MAX_PER_RING);
+    const ringSlot = index % ATTRIBUTE_MAX_PER_RING;
+    const ringCount = Math.min(
+      ATTRIBUTE_MAX_PER_RING,
+      orderedAttributes.length - ringIndex * ATTRIBUTE_MAX_PER_RING,
+    );
     const node = placeCandidateAttribute(
       attribute,
       ownerShape,
       ownerKind,
-      getSideCandidates(ownerShape, side, counts[side]),
+      getRadialCandidates(ownerShape, ringSlot, ringIndex, ringCount, baseAngle),
       placedAttributes,
       nodes,
       nodeObstacles,
       0,
     );
-    counts[side] += 1;
     nodes.push(node);
-    edges.push(connectOwnerToAttribute(ownerShape, node, bendAmount));
+    const bendDirection = index % 2 === 0 ? 1 : -1;
+    edges.push(
+      connectOwnerToAttribute(
+        ownerShape,
+        node,
+        bendDirection * (EDGE_CURVE_OFFSET * 0.55 + ringIndex * 4),
+      ),
+    );
     if (attribute.children.length > 0) {
       const childNodes = placeCompositeChildren(
         node,
@@ -1326,54 +1323,8 @@ function placeRootAttributes(
     }
   };
 
-  keyAttributes.forEach((attribute) => {
-    placeAttribute(attribute, "top", ATTRIBUTE_OWNER_CURVE_BEND * 0.55);
-  });
-
-  regularAttributes.forEach((attribute, index) => {
-    const side = regularSlots[index] ?? "bottom";
-    const bendAmount =
-      side === "left" ? -ATTRIBUTE_OWNER_CURVE_BEND * 0.55 :
-      side === "right" ? ATTRIBUTE_OWNER_CURVE_BEND * 0.55 :
-      ATTRIBUTE_OWNER_CURVE_BEND * 0.25;
-    placeAttribute(attribute, side, bendAmount);
-  });
-
-  compositeAttributes.forEach((attribute) => {
-    const node = placeCandidateAttribute(
-      attribute,
-      ownerShape,
-      ownerKind,
-      [
-        {
-          x: ownerShape.x + getBalancedOffset(counts.bottom, ATTRIBUTE_SPACING * 1.12),
-          y: ownerShape.y + COMPOSITE_ATTRIBUTE_Y_OFFSET,
-        },
-        {
-          x: ownerShape.x + getBalancedOffset(counts.bottom, ATTRIBUTE_SPACING * 1.12),
-          y: ownerShape.y + COMPOSITE_ATTRIBUTE_Y_OFFSET + 28,
-        },
-      ],
-      placedAttributes,
-      nodes,
-      nodeObstacles,
-      0,
-    );
-    counts.bottom += 1;
-    nodes.push(node);
-    edges.push(connectOwnerToAttribute(ownerShape, node, ATTRIBUTE_OWNER_CURVE_BEND * 0.2));
-
-    if (attribute.children.length > 0) {
-      const childNodes = placeCompositeChildren(
-        node,
-        attribute,
-        { x: ownerShape.x, y: ownerShape.y },
-        [...placedAttributes, ...nodes],
-        nodeObstacles,
-      );
-      childNodes.nodes.forEach((childNode) => nodes.push(childNode));
-      childNodes.edges.forEach((edge) => edges.push(edge));
-    }
+  orderedAttributes.forEach((attribute, index) => {
+    placeAttribute(attribute, index);
   });
 
   return { nodes, edges };
@@ -1392,7 +1343,7 @@ function placeCompositeChildren(
   const childCount = attribute.children.length;
 
   attribute.children.forEach((child, index) => {
-    const spread = childCount > 1 ? (index / (childCount - 1) - 0.5) * 0.9 : 0;
+    const spread = childCount > 1 ? (index / (childCount - 1) - 0.5) * 1.15 : 0;
     let angle = outwardAngle + spread;
     let radius = COMPOSITE_CHILD_RADIUS;
     let node = createAttributeNode(
@@ -1410,8 +1361,8 @@ function placeCompositeChildren(
         break;
       }
 
-      angle += 0.14;
-      radius += 12;
+      angle += 0.18;
+      radius += 18;
       node = createAttributeNode(
         child,
         rootNode.ownerId,
@@ -1794,31 +1745,22 @@ export async function createDiagramLayout(model: {
     degreesByEntityId,
     adjacencyWeights,
   } = buildCoreRelationshipInfo(model.entities, model.relationships);
-  const relationshipZones = createRelationshipZones(
-    relationshipInfos,
-    degreesByEntityId,
-  );
-  const entityTargetPositions = computeEntityTargetPositions(
-    model.entities,
-    relationshipInfos,
-    relationshipZones,
-    degreesByEntityId,
-  );
   const initialEntities = createInitialEntityPlacements(
     model.entities,
     degreesByEntityId,
-    entityTargetPositions,
+  );
+  const entitySlotTargets = new Map(
+    initialEntities.map((entity) => [entity.id, { x: entity.x, y: entity.y }]),
   );
   const positionedEntities = runForceLayout(
     initialEntities,
     adjacencyWeights,
     degreesByEntityId,
-    entityTargetPositions,
+    entitySlotTargets,
   );
   const positionedRelationships = placeRelationships(
     relationshipInfos,
     positionedEntities,
-    relationshipZones,
   );
   const shapesById = new Map<string, CoreShape>();
 
