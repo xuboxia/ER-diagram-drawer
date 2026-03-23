@@ -1,4 +1,3 @@
-import ELK from "elkjs/lib/elk.bundled.js";
 import type {
   AttributeModel,
   DiagramLayout,
@@ -12,8 +11,6 @@ import type {
   RelationshipModel,
 } from "../types/diagram";
 
-const elk = new ELK();
-
 const ENTITY_WIDTH = 170;
 const ENTITY_HEIGHT = 68;
 const ATTRIBUTE_RX = 58;
@@ -21,60 +18,39 @@ const ATTRIBUTE_RY = 24;
 const RELATIONSHIP_WIDTH = 118;
 const RELATIONSHIP_HEIGHT = 74;
 
-const MIN_ENTITY_ZONE_WIDTH = 380;
-const ENTITY_LAYOUT_PADDING_Y = 24;
-const RELATIONSHIP_LAYOUT_PADDING = 24;
 const LAYOUT_MARGIN = 120;
 const TARGET_PAGE_ASPECT_RATIO = 1.414;
 
-const ATTRIBUTE_NODE_WIDTH = ATTRIBUTE_RX * 2;
-const ATTRIBUTE_TOP_OFFSET = 126;
-const ATTRIBUTE_BOTTOM_OFFSET = 132;
-const ATTRIBUTE_TOP_ROW_GAP = 70;
-const ATTRIBUTE_SIDE_OFFSET = 146;
-const ATTRIBUTE_SIDE_ROW_GAP = 72;
-const ATTRIBUTE_SIDE_BASE_Y = 28;
-const ATTRIBUTE_SIBLING_GAP = 24;
-const ATTRIBUTE_OUTWARD_STEP = 34;
+const ENTITY_GRID_SPACING_X = 320;
+const ENTITY_GRID_SPACING_Y = 250;
+const ENTITY_REPULSION = 65000;
+const ENTITY_ATTRACTION = 0.0036;
+const ENTITY_CENTER_GRAVITY = 0.005;
+const ENTITY_FORCE_ITERATIONS = 180;
+const ENTITY_COLLISION_PADDING = 46;
+
+const RELATIONSHIP_PAIR_OFFSET = 52;
+const RELATIONSHIP_TRIPLE_OFFSET = 38;
+const SELF_RELATIONSHIP_DISTANCE = 210;
+const RELATIONSHIP_COLLISION_PADDING = 30;
+
+const ATTRIBUTE_BASE_RADIUS = 146;
+const ATTRIBUTE_RING_STEP = 54;
+const ATTRIBUTE_MAX_PER_RING = 8;
 const ATTRIBUTE_COLLISION_PADDING = 14;
-const ATTRIBUTE_EDGE_PADDING = 10;
-const ATTRIBUTE_MAX_PUSH_STEPS = 6;
-
-const RELATIONSHIP_ATTRIBUTE_OFFSET = 110;
-const RELATIONSHIP_ATTRIBUTE_ROW_GAP = 60;
-const RELATIONSHIP_ATTRIBUTE_SIDE_OFFSET = 122;
-
-const COMPOSITE_ROOT_GAP = 50;
-const COMPOSITE_CHILD_GAP = 30;
-const COMPOSITE_LEVEL_GAP = 88;
-const COMPOSITE_PUSH_STEP = 34;
+const ATTRIBUTE_OWNER_CURVE_BEND = 18;
+const COMPOSITE_CHILD_RADIUS = 92;
+const COMPOSITE_LEVEL_Y_STEP = 74;
 
 const RELATIONSHIP_DOUBLE_LINE_OFFSET = 4;
 const RELATIONSHIP_ARROW_LENGTH = 18;
 const RELATIONSHIP_ARROW_WIDTH = 14;
-const EDGE_OBSTACLE_PADDING = 12;
-const ORTHOGONAL_ROUTE_MARGIN = 30;
 
-type AttributeSide = "top" | "left" | "right" | "bottom";
 type ShapeKind = "entity" | "relationship";
 type AttributeOwnerKind = "entity" | "relationship";
 
-interface EntityMetrics {
-  keyAttributes: AttributeModel[];
-  regularAttributes: AttributeModel[];
-  compositeAttributes: AttributeModel[];
-  zoneWidth: number;
-  topExtent: number;
-  bottomExtent: number;
-  layoutWidth: number;
-  layoutHeight: number;
-}
-
 interface EntityPlacement extends PositionedEntity {
   model: EntityModel;
-  zoneWidth: number;
-  topExtent: number;
-  bottomExtent: number;
 }
 
 interface LayoutRect {
@@ -93,29 +69,53 @@ interface CoreShape {
   height: number;
 }
 
-interface ElkSection {
-  startPoint?: LayoutPoint;
-  endPoint?: LayoutPoint;
-  bendPoints?: LayoutPoint[];
+interface CoreRelationshipInfo {
+  model: RelationshipModel;
+  participantEntityIds: string[];
 }
 
-interface ElkEdge {
-  id: string;
-  sections?: ElkSection[];
-}
-
-interface ElkNode {
-  id: string;
-  x?: number;
-  y?: number;
-  width?: number;
-  height?: number;
-  children?: ElkNode[];
-  edges?: ElkEdge[];
+interface RelationshipPlacementInfo {
+  relationship: PositionedRelationship;
+  participantCount: number;
+  groupIndex: number;
 }
 
 function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
+}
+
+function angleBetween(from: LayoutPoint, to: LayoutPoint): number {
+  return Math.atan2(to.y - from.y, to.x - from.x);
+}
+
+function normalizeAngle(angle: number): number {
+  let nextAngle = angle;
+
+  while (nextAngle <= -Math.PI) {
+    nextAngle += Math.PI * 2;
+  }
+
+  while (nextAngle > Math.PI) {
+    nextAngle -= Math.PI * 2;
+  }
+
+  return nextAngle;
+}
+
+function polarPoint(centerX: number, centerY: number, radius: number, angle: number): LayoutPoint {
+  return {
+    x: centerX + Math.cos(angle) * radius,
+    y: centerY + Math.sin(angle) * radius,
+  };
+}
+
+function getBalancedOffset(index: number, gap: number): number {
+  if (index === 0) {
+    return 0;
+  }
+
+  const step = Math.ceil(index / 2);
+  return (index % 2 === 1 ? -1 : 1) * step * gap;
 }
 
 function getRectBoundaryPoint(
@@ -184,33 +184,89 @@ function getDiamondBoundaryPoint(
   };
 }
 
-function getBandWidth(count: number, maxPerRow: number, gap: number): number {
-  if (count <= 0) {
-    return 0;
+function getShapeBoundaryPoint(shape: CoreShape, toward: LayoutPoint): LayoutPoint {
+  if (shape.kind === "relationship") {
+    return getDiamondBoundaryPoint(shape.x, shape.y, shape.width, shape.height, toward.x, toward.y);
   }
 
-  const itemsInWidestRow = Math.min(count, maxPerRow);
-  return itemsInWidestRow * ATTRIBUTE_NODE_WIDTH + Math.max(0, itemsInWidestRow - 1) * gap;
+  return getRectBoundaryPoint(shape.x, shape.y, shape.width, shape.height, toward.x, toward.y);
 }
 
-function splitIntoRows<T>(items: T[], maxPerRow: number): T[][] {
-  if (items.length === 0) {
-    return [];
+function getShapeBounds(shape: CoreShape): LayoutRect {
+  return {
+    minX: shape.x - shape.width / 2,
+    minY: shape.y - shape.height / 2,
+    maxX: shape.x + shape.width / 2,
+    maxY: shape.y + shape.height / 2,
+  };
+}
+
+function expandRect(rect: LayoutRect, padding: number): LayoutRect {
+  return {
+    minX: rect.minX - padding,
+    minY: rect.minY - padding,
+    maxX: rect.maxX + padding,
+    maxY: rect.maxY + padding,
+  };
+}
+
+function rectsOverlap(left: LayoutRect, right: LayoutRect): boolean {
+  return !(
+    left.maxX < right.minX ||
+    left.minX > right.maxX ||
+    left.maxY < right.minY ||
+    left.minY > right.maxY
+  );
+}
+
+function getAttributeBounds(attribute: Pick<PositionedAttribute, "x" | "y" | "rx" | "ry">): LayoutRect {
+  return {
+    minX: attribute.x - attribute.rx,
+    minY: attribute.y - attribute.ry,
+    maxX: attribute.x + attribute.rx,
+    maxY: attribute.y + attribute.ry,
+  };
+}
+
+function getPolylineMidpoint(points: LayoutPoint[]): LayoutPoint {
+  if (points.length === 0) {
+    return { x: 0, y: 0 };
   }
 
-  const rows = Math.ceil(items.length / maxPerRow);
-  const result: T[][] = [];
-  let index = 0;
-
-  for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
-    const remainingItems = items.length - index;
-    const remainingRows = rows - rowIndex;
-    const rowSize = Math.ceil(remainingItems / remainingRows);
-    result.push(items.slice(index, index + rowSize));
-    index += rowSize;
+  if (points.length === 1) {
+    return points[0];
   }
 
-  return result;
+  const segmentLengths = points.slice(0, -1).map((point, index) =>
+    Math.hypot(points[index + 1].x - point.x, points[index + 1].y - point.y),
+  );
+  const totalLength = sum(segmentLengths);
+
+  if (totalLength === 0) {
+    return points[0];
+  }
+
+  let traversed = 0;
+  const targetLength = totalLength / 2;
+
+  for (let index = 0; index < segmentLengths.length; index += 1) {
+    const segmentLength = segmentLengths[index];
+
+    if (traversed + segmentLength < targetLength) {
+      traversed += segmentLength;
+      continue;
+    }
+
+    const start = points[index];
+    const end = points[index + 1];
+    const ratio = (targetLength - traversed) / (segmentLength || 1);
+    return {
+      x: start.x + (end.x - start.x) * ratio,
+      y: start.y + (end.y - start.y) * ratio,
+    };
+  }
+
+  return points[points.length - 1];
 }
 
 function classifyRootAttributes(attributes: AttributeModel[]) {
@@ -238,833 +294,493 @@ function classifyRootAttributes(attributes: AttributeModel[]) {
   );
 }
 
-function getCompositeSubtreeSpan(attribute: AttributeModel): number {
-  if (attribute.children.length === 0) {
-    return ATTRIBUTE_NODE_WIDTH;
-  }
+function getGridSlots(count: number, columns: number, spacingX: number, spacingY: number): LayoutPoint[] {
+  const rows = Math.ceil(count / columns);
+  const slots: LayoutPoint[] = [];
 
-  const childSpans = attribute.children.map(getCompositeSubtreeSpan);
-  const childrenWidth =
-    sum(childSpans) + Math.max(0, attribute.children.length - 1) * COMPOSITE_CHILD_GAP;
-
-  return Math.max(ATTRIBUTE_NODE_WIDTH, childrenWidth);
-}
-
-function getCompositeDepth(attribute: AttributeModel): number {
-  if (attribute.children.length === 0) {
-    return 0;
-  }
-
-  return 1 + Math.max(...attribute.children.map(getCompositeDepth));
-}
-
-function getCompositeForestWidth(attributes: AttributeModel[]): number {
-  if (attributes.length === 0) {
-    return 0;
-  }
-
-  const spans = attributes.map(getCompositeSubtreeSpan);
-  return sum(spans) + Math.max(0, attributes.length - 1) * COMPOSITE_ROOT_GAP;
-}
-
-function getEntityMetrics(entity: EntityModel): EntityMetrics {
-  const { keyAttributes, regularAttributes, compositeAttributes } = classifyRootAttributes(
-    entity.attributes,
-  );
-
-  const keyRows = splitIntoRows(keyAttributes, 3);
-  const keyBandWidth = getBandWidth(keyAttributes.length, 3, ATTRIBUTE_SIBLING_GAP);
-  const regularRows = Math.ceil(regularAttributes.length / 2);
-  const compositeWidth = getCompositeForestWidth(compositeAttributes);
-  const compositeDepth = compositeAttributes.length
-    ? Math.max(...compositeAttributes.map(getCompositeDepth))
-    : 0;
-
-  const topExtent =
-    keyRows.length > 0
-      ? ATTRIBUTE_TOP_OFFSET +
-        (keyRows.length - 1) * ATTRIBUTE_TOP_ROW_GAP +
-        ATTRIBUTE_RY
-      : 0;
-
-  const regularBottomExtent =
-    regularRows > 0
-      ? ATTRIBUTE_BOTTOM_OFFSET +
-        (regularRows - 1) * ATTRIBUTE_SIDE_ROW_GAP +
-        ATTRIBUTE_RY
-      : 0;
-
-  const compositeBottomExtent =
-    compositeAttributes.length > 0
-      ? ATTRIBUTE_BOTTOM_OFFSET + compositeDepth * COMPOSITE_LEVEL_GAP + ATTRIBUTE_RY
-      : 0;
-
-  const sideWidth = ATTRIBUTE_SIDE_OFFSET + ATTRIBUTE_RX;
-  const zoneWidth = Math.max(
-    MIN_ENTITY_ZONE_WIDTH,
-    keyBandWidth + 80,
-    compositeWidth + 80,
-    ENTITY_WIDTH + sideWidth * 2 + 32,
-  );
-  const bottomExtent = Math.max(regularBottomExtent, compositeBottomExtent, ATTRIBUTE_RY + 36);
-
-  return {
-    keyAttributes,
-    regularAttributes,
-    compositeAttributes,
-    zoneWidth,
-    topExtent,
-    bottomExtent,
-    layoutWidth: zoneWidth,
-    layoutHeight: topExtent + ENTITY_HEIGHT + bottomExtent + ENTITY_LAYOUT_PADDING_Y * 2,
-  };
-}
-
-function getShapeBounds(shape: CoreShape): LayoutRect {
-  return {
-    minX: shape.x - shape.width / 2,
-    minY: shape.y - shape.height / 2,
-    maxX: shape.x + shape.width / 2,
-    maxY: shape.y + shape.height / 2,
-  };
-}
-
-function expandRect(rect: LayoutRect, padding: number): LayoutRect {
-  return {
-    minX: rect.minX - padding,
-    minY: rect.minY - padding,
-    maxX: rect.maxX + padding,
-    maxY: rect.maxY + padding,
-  };
-}
-
-function getAttributeBounds(attribute: Pick<PositionedAttribute, "x" | "y" | "rx" | "ry">): LayoutRect {
-  return {
-    minX: attribute.x - attribute.rx,
-    minY: attribute.y - attribute.ry,
-    maxX: attribute.x + attribute.rx,
-    maxY: attribute.y + attribute.ry,
-  };
-}
-
-function rectsOverlap(left: LayoutRect, right: LayoutRect): boolean {
-  return !(
-    left.maxX < right.minX ||
-    left.minX > right.maxX ||
-    left.maxY < right.minY ||
-    left.minY > right.maxY
-  );
-}
-
-function pointInRect(point: LayoutPoint, rect: LayoutRect): boolean {
-  return (
-    point.x >= rect.minX &&
-    point.x <= rect.maxX &&
-    point.y >= rect.minY &&
-    point.y <= rect.maxY
-  );
-}
-
-function orientation(a: LayoutPoint, b: LayoutPoint, c: LayoutPoint): number {
-  return (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y);
-}
-
-function onSegment(a: LayoutPoint, b: LayoutPoint, c: LayoutPoint): boolean {
-  return (
-    Math.min(a.x, c.x) <= b.x &&
-    b.x <= Math.max(a.x, c.x) &&
-    Math.min(a.y, c.y) <= b.y &&
-    b.y <= Math.max(a.y, c.y)
-  );
-}
-
-function segmentsIntersect(a1: LayoutPoint, a2: LayoutPoint, b1: LayoutPoint, b2: LayoutPoint): boolean {
-  const o1 = orientation(a1, a2, b1);
-  const o2 = orientation(a1, a2, b2);
-  const o3 = orientation(b1, b2, a1);
-  const o4 = orientation(b1, b2, a2);
-
-  if (o1 === 0 && onSegment(a1, b1, a2)) {
-    return true;
-  }
-
-  if (o2 === 0 && onSegment(a1, b2, a2)) {
-    return true;
-  }
-
-  if (o3 === 0 && onSegment(b1, a1, b2)) {
-    return true;
-  }
-
-  if (o4 === 0 && onSegment(b1, a2, b2)) {
-    return true;
-  }
-
-  return (o1 > 0) !== (o2 > 0) && (o3 > 0) !== (o4 > 0);
-}
-
-function segmentIntersectsRect(start: LayoutPoint, end: LayoutPoint, rect: LayoutRect): boolean {
-  if (pointInRect(start, rect) || pointInRect(end, rect)) {
-    return true;
-  }
-
-  const topLeft = { x: rect.minX, y: rect.minY };
-  const topRight = { x: rect.maxX, y: rect.minY };
-  const bottomLeft = { x: rect.minX, y: rect.maxY };
-  const bottomRight = { x: rect.maxX, y: rect.maxY };
-
-  return (
-    segmentsIntersect(start, end, topLeft, topRight) ||
-    segmentsIntersect(start, end, topRight, bottomRight) ||
-    segmentsIntersect(start, end, bottomRight, bottomLeft) ||
-    segmentsIntersect(start, end, bottomLeft, topLeft)
-  );
-}
-
-function simplifyPolyline(points: LayoutPoint[]): LayoutPoint[] {
-  const deduped = points.filter((point, index) => {
-    if (index === 0) {
-      return true;
-    }
-
-    const previous = points[index - 1];
-    return Math.abs(previous.x - point.x) > 0.1 || Math.abs(previous.y - point.y) > 0.1;
-  });
-
-  if (deduped.length <= 2) {
-    return deduped;
-  }
-
-  const simplified: LayoutPoint[] = [deduped[0]];
-
-  for (let index = 1; index < deduped.length - 1; index += 1) {
-    const previous = simplified[simplified.length - 1];
-    const current = deduped[index];
-    const next = deduped[index + 1];
-    const isCollinear =
-      (Math.abs(previous.x - current.x) < 0.1 && Math.abs(current.x - next.x) < 0.1) ||
-      (Math.abs(previous.y - current.y) < 0.1 && Math.abs(current.y - next.y) < 0.1);
-
-    if (!isCollinear) {
-      simplified.push(current);
-    }
-  }
-
-  simplified.push(deduped[deduped.length - 1]);
-  return simplified;
-}
-
-function polylineIntersectsRect(points: LayoutPoint[], rect: LayoutRect): boolean {
-  for (let index = 0; index < points.length - 1; index += 1) {
-    if (segmentIntersectsRect(points[index], points[index + 1], rect)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function getObstacleBounds(shape: CoreShape): LayoutRect {
-  return expandRect(getShapeBounds(shape), EDGE_OBSTACLE_PADDING);
-}
-
-function getShapeBoundaryPoint(shape: CoreShape, toward: LayoutPoint): LayoutPoint {
-  if (shape.kind === "relationship") {
-    return getDiamondBoundaryPoint(shape.x, shape.y, shape.width, shape.height, toward.x, toward.y);
-  }
-
-  return getRectBoundaryPoint(shape.x, shape.y, shape.width, shape.height, toward.x, toward.y);
-}
-
-function buildPrimaryGraph(
-  entities: EntityModel[],
-  relationships: RelationshipModel[],
-  metricsById: Map<string, EntityMetrics>,
-) {
-  const entitiesByName = new Map<string, EntityModel>();
-  entities.forEach((entity) => {
-    entitiesByName.set(entity.name.toLowerCase(), entity);
-  });
-
-  const children = [
-    ...entities.map((entity) => {
-      const metrics = metricsById.get(entity.id);
-
-      if (!metrics) {
-        throw new Error(`Missing metrics for entity ${entity.id}.`);
+  for (let rowIndex = 0; rowIndex < rows; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex < columns; columnIndex += 1) {
+      if (slots.length >= count) {
+        break;
       }
 
-      return {
-        id: entity.id,
-        width: metrics.layoutWidth,
-        height: metrics.layoutHeight,
-      };
-    }),
-    ...relationships.map((relationship) => ({
-      id: relationship.id,
-      width: RELATIONSHIP_WIDTH + RELATIONSHIP_LAYOUT_PADDING,
-      height: RELATIONSHIP_HEIGHT + RELATIONSHIP_LAYOUT_PADDING,
-    })),
-  ];
+      slots.push({
+        x: (columnIndex - (columns - 1) / 2) * spacingX,
+        y: (rowIndex - (rows - 1) / 2) * spacingY,
+      });
+    }
+  }
 
-  const edges = relationships.flatMap((relationship) =>
-    relationship.participants.flatMap((participant, participantIndex) => {
-      const entity = entitiesByName.get(participant.entity.toLowerCase());
-
-      if (!entity) {
-        return [];
-      }
-
-      return [
-        {
-          id: `${relationship.id}-participant-${participantIndex}`,
-          sources: [entity.id],
-          targets: [relationship.id],
-        },
-      ];
-    }),
-  );
-
-  return {
-    id: "chen-root",
-    layoutOptions: {
-      "elk.algorithm": "layered",
-      "elk.direction": "RIGHT",
-      "elk.spacing.nodeNode": "92",
-      "elk.spacing.edgeNode": "70",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "180",
-      "elk.layered.spacing.edgeNodeBetweenLayers": "96",
-      "elk.layered.spacing.edgeEdgeBetweenLayers": "32",
-      "elk.edgeRouting": "ORTHOGONAL",
-      "elk.layered.nodePlacement.strategy": "NETWORK_SIMPLEX",
-      "elk.layered.nodePlacement.bk.fixedAlignment": "BALANCED",
-      "elk.layered.crossingMinimization.strategy": "LAYER_SWEEP",
-      "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
-      "elk.layered.priority.straightness": "12",
-      "elk.separateConnectedComponents": "true",
-    },
-    children,
-    edges,
-  };
+  return slots.sort((left, right) => {
+    const leftDistance = Math.hypot(left.x, left.y);
+    const rightDistance = Math.hypot(right.x, right.y);
+    return leftDistance - rightDistance;
+  });
 }
 
-async function runPrimaryLayout(
+function buildCoreRelationshipInfo(
   entities: EntityModel[],
   relationships: RelationshipModel[],
-  metricsById: Map<string, EntityMetrics>,
-): Promise<{
-  entities: EntityPlacement[];
-  relationships: PositionedRelationship[];
-  shapesById: Map<string, CoreShape>;
-  edgeSectionsById: Map<string, LayoutPoint[]>;
-}> {
-  const graph = buildPrimaryGraph(entities, relationships, metricsById);
-  const laidOutGraph = (await (elk.layout as (nextGraph: unknown) => Promise<unknown>)(
-    graph,
-  )) as ElkNode;
-  const nodeById = new Map<string, ElkNode>();
-  const edgeSectionsById = new Map<string, LayoutPoint[]>();
+): {
+  relationshipInfos: CoreRelationshipInfo[];
+  degreesByEntityId: Map<string, number>;
+  entityIdsByName: Map<string, string>;
+  adjacencyWeights: Map<string, Map<string, number>>;
+} {
+  const entityIdsByName = new Map(entities.map((entity) => [entity.name.toLowerCase(), entity.id]));
+  const degreesByEntityId = new Map(entities.map((entity) => [entity.id, 0]));
+  const adjacencyWeights = new Map(
+    entities.map((entity) => [entity.id, new Map<string, number>()]),
+  );
+  const relationshipInfos = relationships.map((relationship) => {
+    const participantEntityIds = relationship.participants
+      .map((participant) => entityIdsByName.get(participant.entity.toLowerCase()))
+      .filter((entityId): entityId is string => entityId !== undefined);
 
-  (laidOutGraph.children ?? []).forEach((node) => {
-    nodeById.set(node.id, node);
-  });
+    participantEntityIds.forEach((entityId) => {
+      degreesByEntityId.set(entityId, (degreesByEntityId.get(entityId) ?? 0) + 1);
+    });
 
-  (laidOutGraph.edges ?? []).forEach((edge) => {
-    const section = edge.sections?.[0];
+    for (let leftIndex = 0; leftIndex < participantEntityIds.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < participantEntityIds.length; rightIndex += 1) {
+        const leftId = participantEntityIds[leftIndex];
+        const rightId = participantEntityIds[rightIndex];
+        const leftEdges = adjacencyWeights.get(leftId);
+        const rightEdges = adjacencyWeights.get(rightId);
 
-    if (!section?.startPoint || !section.endPoint) {
-      return;
-    }
-
-    edgeSectionsById.set(
-      edge.id,
-      simplifyPolyline([section.startPoint, ...(section.bendPoints ?? []), section.endPoint]),
-    );
-  });
-
-  const entityPlacements: EntityPlacement[] = entities.map((entity) => {
-    const node = nodeById.get(entity.id);
-    const metrics = metricsById.get(entity.id);
-
-    if (!node || !metrics || node.x === undefined || node.y === undefined) {
-      throw new Error(`ELK did not return a position for entity ${entity.id}.`);
+        if (leftEdges && rightEdges) {
+          leftEdges.set(rightId, (leftEdges.get(rightId) ?? 0) + 1);
+          rightEdges.set(leftId, (rightEdges.get(leftId) ?? 0) + 1);
+        }
+      }
     }
 
     return {
-      id: entity.id,
-      name: entity.name,
-      kind: entity.kind,
-      model: entity,
-      x: node.x + metrics.layoutWidth / 2,
-      y: node.y + ENTITY_LAYOUT_PADDING_Y + metrics.topExtent + ENTITY_HEIGHT / 2,
-      width: ENTITY_WIDTH,
-      height: ENTITY_HEIGHT,
-      zoneWidth: metrics.zoneWidth,
-      topExtent: metrics.topExtent,
-      bottomExtent: metrics.bottomExtent,
+      model: relationship,
+      participantEntityIds,
     };
-  });
-
-  const entityIdsByName = new Map(entityPlacements.map((entity) => [entity.name.toLowerCase(), entity.id]));
-  const shapesById = new Map<string, CoreShape>();
-
-  entityPlacements.forEach((entity) => {
-    shapesById.set(entity.id, {
-      id: entity.id,
-      kind: "entity",
-      x: entity.x,
-      y: entity.y,
-      width: entity.width,
-      height: entity.height,
-    });
-  });
-
-  const relationshipPlacements: PositionedRelationship[] = relationships.map((relationship) => {
-    const node = nodeById.get(relationship.id);
-
-    if (!node || node.x === undefined || node.y === undefined) {
-      throw new Error(`ELK did not return a position for relationship ${relationship.id}.`);
-    }
-
-    const participants: PositionedRelationshipParticipant[] = relationship.participants.map(
-      (participant) => ({
-        entityId: entityIdsByName.get(participant.entity.toLowerCase()) ?? participant.entity,
-        entityName: participant.entity,
-        endConstraint: participant.endConstraint,
-        roleLabel: participant.roleLabel,
-      }),
-    );
-
-    const positionedRelationship: PositionedRelationship = {
-      id: relationship.id,
-      name: relationship.name,
-      kind: relationship.kind,
-      isSelfRelationship: relationship.isSelfRelationship,
-      x: node.x + (node.width ?? RELATIONSHIP_WIDTH) / 2,
-      y: node.y + (node.height ?? RELATIONSHIP_HEIGHT) / 2,
-      width: RELATIONSHIP_WIDTH,
-      height: RELATIONSHIP_HEIGHT,
-      participants,
-      legacyCardinality: relationship.legacyCardinality,
-    };
-
-    shapesById.set(positionedRelationship.id, {
-      id: positionedRelationship.id,
-      kind: "relationship",
-      x: positionedRelationship.x,
-      y: positionedRelationship.y,
-      width: positionedRelationship.width,
-      height: positionedRelationship.height,
-    });
-
-    return positionedRelationship;
   });
 
   return {
-    entities: entityPlacements,
-    relationships: relationshipPlacements,
-    shapesById,
-    edgeSectionsById,
+    relationshipInfos,
+    degreesByEntityId,
+    entityIdsByName,
+    adjacencyWeights,
   };
 }
 
-function candidateOrthogonalRoutes(
-  start: LayoutPoint,
-  end: LayoutPoint,
-  obstacles: LayoutRect[],
-): LayoutPoint[][] {
-  const routes: LayoutPoint[][] = [];
-  const midX = (start.x + end.x) / 2;
-  const midY = (start.y + end.y) / 2;
-
-  routes.push([start, { x: midX, y: start.y }, { x: midX, y: end.y }, end]);
-  routes.push([start, { x: start.x, y: midY }, { x: end.x, y: midY }, end]);
-
-  obstacles.forEach((obstacle) => {
-    routes.push([
-      start,
-      { x: obstacle.minX - ORTHOGONAL_ROUTE_MARGIN, y: start.y },
-      { x: obstacle.minX - ORTHOGONAL_ROUTE_MARGIN, y: end.y },
-      end,
-    ]);
-    routes.push([
-      start,
-      { x: obstacle.maxX + ORTHOGONAL_ROUTE_MARGIN, y: start.y },
-      { x: obstacle.maxX + ORTHOGONAL_ROUTE_MARGIN, y: end.y },
-      end,
-    ]);
-    routes.push([
-      start,
-      { x: start.x, y: obstacle.minY - ORTHOGONAL_ROUTE_MARGIN },
-      { x: end.x, y: obstacle.minY - ORTHOGONAL_ROUTE_MARGIN },
-      end,
-    ]);
-    routes.push([
-      start,
-      { x: start.x, y: obstacle.maxY + ORTHOGONAL_ROUTE_MARGIN },
-      { x: end.x, y: obstacle.maxY + ORTHOGONAL_ROUTE_MARGIN },
-      end,
-    ]);
+function createInitialEntityPlacements(
+  entities: EntityModel[],
+  degreesByEntityId: Map<string, number>,
+): EntityPlacement[] {
+  const orderedEntities = [...entities].sort((left, right) => {
+    return (degreesByEntityId.get(right.id) ?? 0) - (degreesByEntityId.get(left.id) ?? 0);
   });
+  const columnCount = Math.max(2, Math.ceil(Math.sqrt(orderedEntities.length * TARGET_PAGE_ASPECT_RATIO)));
+  const slots = getGridSlots(
+    orderedEntities.length,
+    columnCount,
+    ENTITY_GRID_SPACING_X,
+    ENTITY_GRID_SPACING_Y,
+  );
 
-  return routes.map(simplifyPolyline);
+  return orderedEntities.map((entity, index) => ({
+    id: entity.id,
+    name: entity.name,
+    kind: entity.kind,
+    model: entity,
+    x: slots[index].x,
+    y: slots[index].y,
+    width: ENTITY_WIDTH,
+    height: ENTITY_HEIGHT,
+  }));
 }
 
-function routeAroundObstacles(
-  points: LayoutPoint[],
-  sourceShapeId: string,
-  targetShapeId: string,
-  shapesById: Map<string, CoreShape>,
-): LayoutPoint[] {
-  const obstacles = [...shapesById.values()]
-    .filter((shape) => shape.id !== sourceShapeId && shape.id !== targetShapeId)
-    .map(getObstacleBounds);
+function resolveEntityCollisions(entities: EntityPlacement[]): EntityPlacement[] {
+  const nextEntities = entities.map((entity) => ({ ...entity }));
 
-  if (!obstacles.some((obstacle) => polylineIntersectsRect(points, obstacle))) {
-    return points;
+  for (let pass = 0; pass < 14; pass += 1) {
+    for (let leftIndex = 0; leftIndex < nextEntities.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < nextEntities.length; rightIndex += 1) {
+        const left = nextEntities[leftIndex];
+        const right = nextEntities[rightIndex];
+        const overlapX =
+          (left.width + right.width) / 2 + ENTITY_COLLISION_PADDING - Math.abs(left.x - right.x);
+        const overlapY =
+          (left.height + right.height) / 2 + ENTITY_COLLISION_PADDING - Math.abs(left.y - right.y);
+
+        if (overlapX <= 0 || overlapY <= 0) {
+          continue;
+        }
+
+        if (overlapX < overlapY) {
+          const push = overlapX / 2;
+
+          if (left.x <= right.x) {
+            left.x -= push;
+            right.x += push;
+          } else {
+            left.x += push;
+            right.x -= push;
+          }
+        } else {
+          const push = overlapY / 2;
+
+          if (left.y <= right.y) {
+            left.y -= push;
+            right.y += push;
+          } else {
+            left.y += push;
+            right.y -= push;
+          }
+        }
+      }
+    }
   }
 
-  const start = points[0];
-  const end = points[points.length - 1];
-  const candidates = candidateOrthogonalRoutes(start, end, obstacles);
-
-  const safeCandidate = candidates.find((candidate) => {
-    return !obstacles.some((obstacle) => polylineIntersectsRect(candidate, obstacle));
-  });
-
-  return safeCandidate ?? points;
+  return nextEntities;
 }
 
-function buildEdgePathFromSection(
-  sourceShape: CoreShape,
-  targetShape: CoreShape,
-  sectionPoints: LayoutPoint[] | undefined,
-): LayoutPoint[] {
-  const fallback = [
-    { x: sourceShape.x, y: sourceShape.y },
-    { x: targetShape.x, y: targetShape.y },
-  ];
-  const rawPoints = sectionPoints && sectionPoints.length >= 2 ? sectionPoints : fallback;
-  const firstGuide = rawPoints[1] ?? rawPoints[rawPoints.length - 1];
-  const lastGuide = rawPoints[rawPoints.length - 2] ?? rawPoints[0];
-  const interior = rawPoints.slice(1, -1);
+function runForceLayout(
+  entities: EntityPlacement[],
+  adjacencyWeights: Map<string, Map<string, number>>,
+  degreesByEntityId: Map<string, number>,
+): EntityPlacement[] {
+  const positions = new Map(
+    entities.map((entity) => [entity.id, { x: entity.x, y: entity.y }]),
+  );
+  const orderedEntities = [...entities];
 
-  const startPoint = getShapeBoundaryPoint(sourceShape, firstGuide);
-  const endPoint = getShapeBoundaryPoint(targetShape, lastGuide);
+  for (let iteration = 0; iteration < ENTITY_FORCE_ITERATIONS; iteration += 1) {
+    const displacements = new Map(
+      orderedEntities.map((entity) => [entity.id, { x: 0, y: 0 }]),
+    );
+    const temperature = 42 * (1 - iteration / ENTITY_FORCE_ITERATIONS) + 6;
 
-  return simplifyPolyline([startPoint, ...interior, endPoint]);
-}
+    for (let leftIndex = 0; leftIndex < orderedEntities.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < orderedEntities.length; rightIndex += 1) {
+        const leftId = orderedEntities[leftIndex].id;
+        const rightId = orderedEntities[rightIndex].id;
+        const left = positions.get(leftId);
+        const right = positions.get(rightId);
 
-function getPolylineMidpoint(points: LayoutPoint[]): LayoutPoint {
-  if (points.length === 0) {
-    return { x: 0, y: 0 };
-  }
+        if (!left || !right) {
+          continue;
+        }
 
-  if (points.length === 1) {
-    return points[0];
-  }
+        let dx = right.x - left.x;
+        let dy = right.y - left.y;
+        let distance = Math.hypot(dx, dy);
 
-  let totalLength = 0;
+        if (distance < 0.001) {
+          dx = 1;
+          dy = 0;
+          distance = 1;
+        }
 
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const start = points[index];
-    const end = points[index + 1];
-    totalLength += Math.hypot(end.x - start.x, end.y - start.y);
-  }
+        const force = ENTITY_REPULSION / (distance * distance);
+        const unitX = dx / distance;
+        const unitY = dy / distance;
+        const leftDisplacement = displacements.get(leftId);
+        const rightDisplacement = displacements.get(rightId);
 
-  if (totalLength === 0) {
-    return points[0];
-  }
-
-  const targetLength = totalLength / 2;
-  let traversed = 0;
-
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const start = points[index];
-    const end = points[index + 1];
-    const segmentLength = Math.hypot(end.x - start.x, end.y - start.y);
-
-    if (traversed + segmentLength < targetLength) {
-      traversed += segmentLength;
-      continue;
+        if (leftDisplacement && rightDisplacement) {
+          leftDisplacement.x -= unitX * force;
+          leftDisplacement.y -= unitY * force;
+          rightDisplacement.x += unitX * force;
+          rightDisplacement.y += unitY * force;
+        }
+      }
     }
 
-    const ratio = (targetLength - traversed) / (segmentLength || 1);
-    return {
-      x: start.x + (end.x - start.x) * ratio,
-      y: start.y + (end.y - start.y) * ratio,
-    };
-  }
+    orderedEntities.forEach((entity) => {
+      const source = positions.get(entity.id);
+      const sourceDisplacement = displacements.get(entity.id);
 
-  return points[points.length - 1];
-}
-
-function createSelfRelationshipPath(
-  entityShape: CoreShape,
-  relationshipShape: CoreShape,
-  branchIndex: number,
-  branchCount: number,
-): LayoutPoint[] {
-  const horizontalDirection = relationshipShape.x >= entityShape.x ? 1 : -1;
-  const branchOffset = branchIndex - (branchCount - 1) / 2;
-  const verticalOffset = branchOffset * (entityShape.height * 0.7);
-  const entityGuide = {
-    x: entityShape.x + horizontalDirection * (entityShape.width / 2 + 72),
-    y: entityShape.y + verticalOffset,
-  };
-  const relationshipGuide = {
-    x: relationshipShape.x - horizontalDirection * (relationshipShape.width / 2 + 34),
-    y: relationshipShape.y + branchOffset * (relationshipShape.height * 0.5),
-  };
-  const startPoint = getRectBoundaryPoint(
-    entityShape.x,
-    entityShape.y,
-    entityShape.width,
-    entityShape.height,
-    entityGuide.x,
-    entityGuide.y,
-  );
-  const endPoint = getDiamondBoundaryPoint(
-    relationshipShape.x,
-    relationshipShape.y,
-    relationshipShape.width,
-    relationshipShape.height,
-    relationshipGuide.x,
-    relationshipGuide.y,
-  );
-  const elbowX =
-    entityShape.x +
-    horizontalDirection *
-      Math.max(entityShape.width / 2 + 66, Math.abs(relationshipShape.x - entityShape.x) / 2 + 26);
-
-  return simplifyPolyline([
-    startPoint,
-    { x: elbowX, y: startPoint.y },
-    { x: elbowX, y: endPoint.y },
-    endPoint,
-  ]);
-}
-
-function createPrimaryEdges(
-  relationships: RelationshipModel[],
-  positionedRelationships: PositionedRelationship[],
-  shapesById: Map<string, CoreShape>,
-  edgeSectionsById: Map<string, LayoutPoint[]>,
-): LayoutEdge[] {
-  const positionedRelationshipsById = new Map(
-    positionedRelationships.map((relationship) => [relationship.id, relationship]),
-  );
-  const edges: LayoutEdge[] = [];
-
-  relationships.forEach((relationship) => {
-    const relationshipShape = shapesById.get(relationship.id);
-    const positionedRelationship = positionedRelationshipsById.get(relationship.id);
-
-    if (!relationshipShape || !positionedRelationship) {
-      return;
-    }
-
-    positionedRelationship.participants.forEach((participant, participantIndex) => {
-      const participantShape = shapesById.get(participant.entityId);
-
-      if (!participantShape) {
+      if (!source || !sourceDisplacement) {
         return;
       }
 
-      const selfParticipantCount = positionedRelationship.isSelfRelationship ? 2 : 1;
-      const selfParticipantIndex = positionedRelationship.isSelfRelationship ? participantIndex : 0;
-      const routedPath =
-        positionedRelationship.isSelfRelationship
-          ? createSelfRelationshipPath(
-              participantShape,
-              relationshipShape,
-              selfParticipantIndex,
-              selfParticipantCount,
-            )
-          : routeAroundObstacles(
-              buildEdgePathFromSection(
-                participantShape,
-                relationshipShape,
-                edgeSectionsById.get(`${relationship.id}-participant-${participantIndex}`),
-              ),
-              participantShape.id,
-              relationshipShape.id,
-              shapesById,
-            );
-      const labelPoint = getPolylineMidpoint(routedPath);
+      for (const [targetId, weight] of adjacencyWeights.get(entity.id) ?? []) {
+        if (targetId <= entity.id) {
+          continue;
+        }
 
-      edges.push({
-        id: `${relationship.id}-participant-${participantIndex}`,
-        kind: "entity-relationship",
-        x1: routedPath[0].x,
-        y1: routedPath[0].y,
-        x2: routedPath[routedPath.length - 1].x,
-        y2: routedPath[routedPath.length - 1].y,
-        points: routedPath,
-        endConstraint: participant.endConstraint,
-        label: participant.roleLabel,
-        labelX: participant.roleLabel ? labelPoint.x : undefined,
-        labelY: participant.roleLabel ? labelPoint.y - 12 : undefined,
-      });
+        const target = positions.get(targetId);
+        const targetDisplacement = displacements.get(targetId);
+
+        if (!target || !targetDisplacement) {
+          continue;
+        }
+
+        const dx = target.x - source.x;
+        const dy = target.y - source.y;
+        const distance = Math.max(1, Math.hypot(dx, dy));
+        const idealDistance = ENTITY_GRID_SPACING_X - Math.min(70, (weight - 1) * 26);
+        const force = (distance - idealDistance) * ENTITY_ATTRACTION * Math.max(1, weight);
+        const unitX = dx / distance;
+        const unitY = dy / distance;
+
+        sourceDisplacement.x += unitX * force;
+        sourceDisplacement.y += unitY * force;
+        targetDisplacement.x -= unitX * force;
+        targetDisplacement.y -= unitY * force;
+      }
     });
-  });
 
-  return edges;
-}
+    orderedEntities.forEach((entity) => {
+      const position = positions.get(entity.id);
+      const displacement = displacements.get(entity.id);
 
-function getBalancedOffset(index: number, gap: number): number {
-  if (index === 0) {
-    return 0;
+      if (!position || !displacement) {
+        return;
+      }
+
+      displacement.x -= position.x * ENTITY_CENTER_GRAVITY * Math.max(0.8, (degreesByEntityId.get(entity.id) ?? 1) / 2);
+      displacement.y -= position.y * ENTITY_CENTER_GRAVITY;
+      const length = Math.hypot(displacement.x, displacement.y) || 1;
+      const scale = Math.min(temperature, length) / length;
+      position.x += displacement.x * scale;
+      position.y += displacement.y * scale;
+    });
+
+    const nextPlacements = resolveEntityCollisions(
+      orderedEntities.map((entity) => {
+        const position = positions.get(entity.id);
+
+        return {
+          ...entity,
+          x: position?.x ?? entity.x,
+          y: position?.y ?? entity.y,
+        };
+      }),
+    );
+
+    nextPlacements.forEach((entity) => {
+      positions.set(entity.id, { x: entity.x, y: entity.y });
+    });
   }
 
-  const step = Math.ceil(index / 2);
-  return (index % 2 === 1 ? -1 : 1) * step * gap;
+  return orderedEntities.map((entity) => {
+    const position = positions.get(entity.id);
+
+    return {
+      ...entity,
+      x: position?.x ?? entity.x,
+      y: position?.y ?? entity.y,
+    };
+  });
 }
 
-function getEntityRelationshipBias(
+function findBinaryRelationshipOffsetIndex(
+  relationshipInfo: CoreRelationshipInfo,
+  relationshipInfos: CoreRelationshipInfo[],
+): { index: number; total: number } {
+  const participantIds = [...relationshipInfo.participantEntityIds].sort();
+  const siblings = relationshipInfos.filter((candidate) => {
+    const candidateIds = [...candidate.participantEntityIds].sort();
+    return candidateIds.length === 2 && candidateIds[0] === participantIds[0] && candidateIds[1] === participantIds[1];
+  });
+
+  return {
+    index: siblings.findIndex((candidate) => candidate.model.id === relationshipInfo.model.id),
+    total: siblings.length,
+  };
+}
+
+function findTernaryRelationshipOffsetIndex(
+  relationshipInfo: CoreRelationshipInfo,
+  relationshipInfos: CoreRelationshipInfo[],
+): { index: number; total: number } {
+  const participantIds = [...relationshipInfo.participantEntityIds].sort().join("|");
+  const siblings = relationshipInfos.filter((candidate) => {
+    return candidate.participantEntityIds.length === 3 && [...candidate.participantEntityIds].sort().join("|") === participantIds;
+  });
+
+  return {
+    index: siblings.findIndex((candidate) => candidate.model.id === relationshipInfo.model.id),
+    total: siblings.length,
+  };
+}
+
+function chooseSelfRelationshipAngle(
+  entity: EntityPlacement,
   entities: EntityPlacement[],
   relationships: PositionedRelationship[],
-): Map<string, Array<{ x: number; y: number }>> {
-  const positionsByEntity = new Map<string, Array<{ x: number; y: number }>>();
+): number {
+  const candidates = [-Math.PI / 4, Math.PI / 4, (3 * Math.PI) / 4, (-3 * Math.PI) / 4];
 
-  relationships.forEach((relationship) => {
-    relationship.participants.forEach((participant) => {
-      const list = positionsByEntity.get(participant.entityId) ?? [];
-      list.push({ x: relationship.x, y: relationship.y });
-      positionsByEntity.set(participant.entityId, list);
+  return candidates
+    .map((angle) => {
+      const point = polarPoint(entity.x, entity.y, SELF_RELATIONSHIP_DISTANCE, angle);
+      const clearance = Math.min(
+        ...[
+          ...entities.filter((candidate) => candidate.id !== entity.id).map((candidate) =>
+            Math.hypot(candidate.x - point.x, candidate.y - point.y),
+          ),
+          ...relationships.map((relationship) =>
+            Math.hypot(relationship.x - point.x, relationship.y - point.y),
+          ),
+          Infinity,
+        ],
+      );
+
+      return { angle, clearance };
+    })
+    .sort((left, right) => right.clearance - left.clearance)[0].angle;
+}
+
+function nudgeRelationshipPoint(
+  x: number,
+  y: number,
+  entities: EntityPlacement[],
+  relationships: PositionedRelationship[],
+  relationshipId: string,
+): LayoutPoint {
+  const candidateOffsets = [
+    { x: 0, y: 0 },
+    { x: 26, y: 0 },
+    { x: -26, y: 0 },
+    { x: 0, y: 26 },
+    { x: 0, y: -26 },
+    { x: 36, y: 24 },
+    { x: -36, y: 24 },
+    { x: 36, y: -24 },
+    { x: -36, y: -24 },
+    { x: 52, y: 0 },
+    { x: -52, y: 0 },
+  ];
+
+  for (const offset of candidateOffsets) {
+    const nextRect = expandRect(
+      {
+        minX: x + offset.x - RELATIONSHIP_WIDTH / 2,
+        minY: y + offset.y - RELATIONSHIP_HEIGHT / 2,
+        maxX: x + offset.x + RELATIONSHIP_WIDTH / 2,
+        maxY: y + offset.y + RELATIONSHIP_HEIGHT / 2,
+      },
+      RELATIONSHIP_COLLISION_PADDING,
+    );
+    const collidesWithEntity = entities.some((entity) =>
+      rectsOverlap(
+        nextRect,
+        expandRect(
+          {
+            minX: entity.x - entity.width / 2,
+            minY: entity.y - entity.height / 2,
+            maxX: entity.x + entity.width / 2,
+            maxY: entity.y + entity.height / 2,
+          },
+          8,
+        ),
+      ),
+    );
+    const collidesWithRelationship = relationships
+      .filter((relationship) => relationship.id !== relationshipId)
+      .some((relationship) =>
+        rectsOverlap(
+          nextRect,
+          expandRect(
+            {
+              minX: relationship.x - relationship.width / 2,
+              minY: relationship.y - relationship.height / 2,
+              maxX: relationship.x + relationship.width / 2,
+              maxY: relationship.y + relationship.height / 2,
+            },
+            10,
+          ),
+        ),
+      );
+
+    if (!collidesWithEntity && !collidesWithRelationship) {
+      return {
+        x: x + offset.x,
+        y: y + offset.y,
+      };
+    }
+  }
+
+  return { x, y };
+}
+
+function placeRelationships(
+  relationshipInfos: CoreRelationshipInfo[],
+  entities: EntityPlacement[],
+): PositionedRelationship[] {
+  const entityById = new Map(entities.map((entity) => [entity.id, entity]));
+  const positionedRelationships: PositionedRelationship[] = [];
+
+  relationshipInfos.forEach((relationshipInfo) => {
+    const participants = relationshipInfo.model.participants.map((participant, index) => ({
+      entityId: relationshipInfo.participantEntityIds[index] ?? participant.entity,
+      entityName: participant.entity,
+      endConstraint: participant.endConstraint,
+      roleLabel: participant.roleLabel,
+    }));
+    const participantEntities = relationshipInfo.participantEntityIds
+      .map((entityId) => entityById.get(entityId))
+      .filter((entity): entity is EntityPlacement => entity !== undefined);
+    let position: LayoutPoint = { x: 0, y: 0 };
+
+    if (relationshipInfo.model.isSelfRelationship && participantEntities[0]) {
+      const selfAngle = chooseSelfRelationshipAngle(
+        participantEntities[0],
+        entities,
+        positionedRelationships,
+      );
+      position = polarPoint(
+        participantEntities[0].x,
+        participantEntities[0].y,
+        SELF_RELATIONSHIP_DISTANCE,
+        selfAngle,
+      );
+    } else if (participantEntities.length === 2) {
+      const left = participantEntities[0];
+      const right = participantEntities[1];
+      const midpoint = {
+        x: (left.x + right.x) / 2,
+        y: (left.y + right.y) / 2,
+      };
+      const angle = angleBetween(left, right) + Math.PI / 2;
+      const { index } = findBinaryRelationshipOffsetIndex(relationshipInfo, relationshipInfos);
+      const offset = getBalancedOffset(index, RELATIONSHIP_PAIR_OFFSET);
+      position = polarPoint(midpoint.x, midpoint.y, Math.abs(offset), angle + (offset >= 0 ? 0 : Math.PI));
+    } else {
+      const centroid = {
+        x: sum(participantEntities.map((entity) => entity.x)) / Math.max(1, participantEntities.length),
+        y: sum(participantEntities.map((entity) => entity.y)) / Math.max(1, participantEntities.length),
+      };
+      const { index } = findTernaryRelationshipOffsetIndex(relationshipInfo, relationshipInfos);
+      const offset = getBalancedOffset(index, RELATIONSHIP_TRIPLE_OFFSET);
+      position = {
+        x: centroid.x + offset,
+        y: centroid.y - offset * 0.35,
+      };
+    }
+
+    const nudgedPosition = nudgeRelationshipPoint(
+      position.x,
+      position.y,
+      entities,
+      positionedRelationships,
+      relationshipInfo.model.id,
+    );
+
+    positionedRelationships.push({
+      id: relationshipInfo.model.id,
+      name: relationshipInfo.model.name,
+      kind: relationshipInfo.model.kind,
+      isSelfRelationship: relationshipInfo.model.isSelfRelationship,
+      x: nudgedPosition.x,
+      y: nudgedPosition.y,
+      width: RELATIONSHIP_WIDTH,
+      height: RELATIONSHIP_HEIGHT,
+      participants,
+      legacyCardinality: relationshipInfo.model.legacyCardinality,
     });
   });
 
-  entities.forEach((entity) => {
-    if (!positionsByEntity.has(entity.id)) {
-      positionsByEntity.set(entity.id, []);
-    }
-  });
-
-  return positionsByEntity;
-}
-
-function getEntityRegularSidePriority(
-  entity: EntityPlacement,
-  relationshipPositions: Array<{ x: number; y: number }>,
-): AttributeSide[] {
-  if (relationshipPositions.length === 0) {
-    return ["left", "right", "bottom", "top"];
-  }
-
-  const averageDx =
-    relationshipPositions.reduce((total, relationship) => total + (relationship.x - entity.x), 0) /
-    relationshipPositions.length;
-  const averageDy =
-    relationshipPositions.reduce((total, relationship) => total + (relationship.y - entity.y), 0) /
-    relationshipPositions.length;
-
-  if (Math.abs(averageDx) >= Math.abs(averageDy)) {
-    return averageDx >= 0
-      ? ["left", "bottom", "top", "right"]
-      : ["right", "bottom", "top", "left"];
-  }
-
-  return averageDy >= 0
-    ? ["top", "left", "right", "bottom"]
-    : ["bottom", "left", "right", "top"];
-}
-
-function getRelationshipAttributeSidePriority(relationship: PositionedRelationship): AttributeSide[] {
-  const participantSpreadX =
-    Math.max(...relationship.participants.map((participant) => participant.entityId.length), 1);
-
-  return participantSpreadX > 0 ? ["top", "bottom", "right", "left"] : ["top", "bottom", "left", "right"];
-}
-
-function getEntityAttributeCandidate(
-  entity: CoreShape,
-  side: AttributeSide,
-  slotIndex: number,
-  outwardStep: number,
-): LayoutPoint {
-  const horizontalGap = ATTRIBUTE_NODE_WIDTH + ATTRIBUTE_SIBLING_GAP;
-
-  if (side === "top") {
-    return {
-      x: entity.x + getBalancedOffset(slotIndex, horizontalGap),
-      y: entity.y - ATTRIBUTE_TOP_OFFSET - outwardStep * ATTRIBUTE_OUTWARD_STEP,
-    };
-  }
-
-  if (side === "bottom") {
-    return {
-      x: entity.x + getBalancedOffset(slotIndex, horizontalGap),
-      y: entity.y + ATTRIBUTE_BOTTOM_OFFSET + outwardStep * ATTRIBUTE_OUTWARD_STEP,
-    };
-  }
-
-  return {
-    x:
-      entity.x +
-      (side === "left" ? -ATTRIBUTE_SIDE_OFFSET : ATTRIBUTE_SIDE_OFFSET) +
-      (side === "left" ? -1 : 1) * outwardStep * ATTRIBUTE_OUTWARD_STEP,
-    y: entity.y + ATTRIBUTE_SIDE_BASE_Y + getBalancedOffset(slotIndex, ATTRIBUTE_SIDE_ROW_GAP),
-  };
-}
-
-function getRelationshipAttributeCandidate(
-  relationship: CoreShape,
-  side: AttributeSide,
-  slotIndex: number,
-  outwardStep: number,
-): LayoutPoint {
-  const horizontalGap = ATTRIBUTE_NODE_WIDTH + ATTRIBUTE_SIBLING_GAP;
-
-  if (side === "top") {
-    return {
-      x: relationship.x + getBalancedOffset(slotIndex, horizontalGap),
-      y: relationship.y - RELATIONSHIP_ATTRIBUTE_OFFSET - outwardStep * ATTRIBUTE_OUTWARD_STEP,
-    };
-  }
-
-  if (side === "bottom") {
-    return {
-      x: relationship.x + getBalancedOffset(slotIndex, horizontalGap),
-      y: relationship.y + RELATIONSHIP_ATTRIBUTE_OFFSET + outwardStep * ATTRIBUTE_OUTWARD_STEP,
-    };
-  }
-
-  return {
-    x:
-      relationship.x +
-      (side === "left" ? -RELATIONSHIP_ATTRIBUTE_SIDE_OFFSET : RELATIONSHIP_ATTRIBUTE_SIDE_OFFSET) +
-      (side === "left" ? -1 : 1) * outwardStep * ATTRIBUTE_OUTWARD_STEP,
-    y: relationship.y + getBalancedOffset(slotIndex, RELATIONSHIP_ATTRIBUTE_ROW_GAP),
-  };
-}
-
-function attributeCollides(
-  attribute: Pick<PositionedAttribute, "x" | "y" | "rx" | "ry">,
-  nodeObstacles: LayoutRect[],
-  placedAttributes: PositionedAttribute[],
-  edgePaths: LayoutPoint[][],
-): boolean {
-  const bounds = expandRect(getAttributeBounds(attribute), ATTRIBUTE_COLLISION_PADDING);
-
-  if (nodeObstacles.some((obstacle) => rectsOverlap(bounds, obstacle))) {
-    return true;
-  }
-
-  if (
-    placedAttributes.some((placedAttribute) =>
-      rectsOverlap(
-        bounds,
-        expandRect(getAttributeBounds(placedAttribute), ATTRIBUTE_COLLISION_PADDING / 2),
-      ),
-    )
-  ) {
-    return true;
-  }
-
-  return edgePaths.some((points) =>
-    polylineIntersectsRect(points, expandRect(bounds, ATTRIBUTE_EDGE_PADDING)),
-  );
+  return positionedRelationships;
 }
 
 function createAttributeNode(
@@ -1093,9 +809,29 @@ function createAttributeNode(
   };
 }
 
+function createCurvedEdge(start: LayoutPoint, end: LayoutPoint, bendAmount: number): LayoutPoint[] {
+  const midX = (start.x + end.x) / 2;
+  const midY = (start.y + end.y) / 2;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const normalX = -dy / length;
+  const normalY = dx / length;
+
+  return [
+    start,
+    {
+      x: midX + normalX * bendAmount,
+      y: midY + normalY * bendAmount,
+    },
+    end,
+  ];
+}
+
 function connectOwnerToAttribute(
   ownerShape: CoreShape,
   attribute: PositionedAttribute,
+  bendAmount: number,
 ): LayoutEdge {
   const start = getShapeBoundaryPoint(ownerShape, { x: attribute.x, y: attribute.y });
   const end = getEllipseBoundaryPoint(attribute.x, attribute.y, attribute.rx, attribute.ry, start.x, start.y);
@@ -1107,7 +843,7 @@ function connectOwnerToAttribute(
     y1: start.y,
     x2: end.x,
     y2: end.y,
-    points: [start, end],
+    points: createCurvedEdge(start, end, bendAmount),
   };
 }
 
@@ -1125,157 +861,208 @@ function connectAttributeToAttribute(
     y1: start.y,
     x2: end.x,
     y2: end.y,
-    points: [start, end],
+    points: createCurvedEdge(start, end, 10),
   };
 }
 
-function flattenCompositeSubtree(root: PositionedAttribute, attribute: AttributeModel): PositionedAttribute[] {
-  const nodes: PositionedAttribute[] = [root];
-
-  const visitChildren = (
-    parentNode: PositionedAttribute,
-    model: AttributeModel,
-    level: number,
-  ) => {
-    if (model.children.length === 0) {
-      return;
-    }
-
-    const childSpans = model.children.map(getCompositeSubtreeSpan);
-    const childrenWidth =
-      sum(childSpans) + Math.max(0, model.children.length - 1) * COMPOSITE_CHILD_GAP;
-    let cursorX = parentNode.x - childrenWidth / 2;
-
-    model.children.forEach((child, index) => {
-      const childSpan = childSpans[index];
-      const childNode = createAttributeNode(
-        child,
-        root.ownerId,
-        root.ownerKind,
-        cursorX + childSpan / 2,
-        parentNode.y + COMPOSITE_LEVEL_GAP,
-        level,
-      );
-      childNode.parentAttributeId = parentNode.id;
-      nodes.push(childNode);
-      visitChildren(childNode, child, level + 1);
-      cursorX += childSpan + COMPOSITE_CHILD_GAP;
-    });
-  };
-
-  visitChildren(root, attribute, 1);
-  return nodes;
-}
-
-function subtreeCollides(
-  nodes: PositionedAttribute[],
-  entityId: string,
-  nodeObstacles: Array<{ id: string; bounds: LayoutRect }>,
+function attributeCollides(
+  attribute: Pick<PositionedAttribute, "x" | "y" | "rx" | "ry">,
+  nodeObstacles: LayoutRect[],
   placedAttributes: PositionedAttribute[],
-  edgePaths: LayoutPoint[][],
 ): boolean {
-  return nodes.some((node) =>
-    attributeCollides(node, nodeObstacles.map((obstacle) => obstacle.bounds), placedAttributes, edgePaths),
-  );
-}
+  const bounds = expandRect(getAttributeBounds(attribute), ATTRIBUTE_COLLISION_PADDING);
 
-function shiftSubtree(nodes: PositionedAttribute[], dx: number, dy: number): PositionedAttribute[] {
-  return nodes.map((node) => ({
-    ...node,
-    x: node.x + dx,
-    y: node.y + dy,
-  }));
-}
-
-function findAttributePlacement(
-  ownerShape: CoreShape,
-  ownerKind: AttributeOwnerKind,
-  attribute: AttributeModel,
-  preferredSides: AttributeSide[],
-  sideCounts: Map<AttributeSide, number>,
-  nodeObstacles: Array<{ id: string; bounds: LayoutRect }>,
-  placedAttributes: PositionedAttribute[],
-  edgePaths: LayoutPoint[][],
-): PositionedAttribute {
-  const candidateFactory =
-    ownerKind === "entity"
-      ? getEntityAttributeCandidate
-      : getRelationshipAttributeCandidate;
-  const tried: Array<{ side: AttributeSide; slot: number }> = [];
-
-  for (const side of preferredSides) {
-    const slotIndex = sideCounts.get(side) ?? 0;
-    tried.push({ side, slot: slotIndex });
-
-    for (let outwardStep = 0; outwardStep <= ATTRIBUTE_MAX_PUSH_STEPS; outwardStep += 1) {
-      const candidate = candidateFactory(ownerShape, side, slotIndex, outwardStep);
-      const node = createAttributeNode(attribute, ownerShape.id, ownerKind, candidate.x, candidate.y, 0);
-
-      if (
-        !attributeCollides(
-          node,
-          nodeObstacles.map((obstacle) => obstacle.bounds),
-          placedAttributes,
-          edgePaths,
-        )
-      ) {
-        sideCounts.set(side, slotIndex + 1);
-        return node;
-      }
-    }
+  if (nodeObstacles.some((obstacle) => rectsOverlap(bounds, obstacle))) {
+    return true;
   }
 
-  const fallback = tried[0] ?? { side: "right" as const, slot: 0 };
-  const candidate = candidateFactory(
-    ownerShape,
-    fallback.side,
-    fallback.slot,
-    ATTRIBUTE_MAX_PUSH_STEPS + 1,
+  return placedAttributes.some((placedAttribute) =>
+    rectsOverlap(
+      bounds,
+      expandRect(getAttributeBounds(placedAttribute), ATTRIBUTE_COLLISION_PADDING / 2),
+    ),
   );
-  sideCounts.set(fallback.side, fallback.slot + 1);
-  return createAttributeNode(attribute, ownerShape.id, ownerKind, candidate.x, candidate.y, 0);
+}
+
+function getOwnerBaseAngle(owner: LayoutPoint, neighborPoints: LayoutPoint[]): number {
+  if (neighborPoints.length === 0) {
+    return -Math.PI / 2;
+  }
+
+  const averagePoint = {
+    x: sum(neighborPoints.map((point) => point.x)) / neighborPoints.length,
+    y: sum(neighborPoints.map((point) => point.y)) / neighborPoints.length,
+  };
+
+  return normalizeAngle(angleBetween(owner, averagePoint) + Math.PI);
+}
+
+function placeRootAttributes(
+  ownerShape: CoreShape,
+  ownerKind: AttributeOwnerKind,
+  attributes: AttributeModel[],
+  neighborPoints: LayoutPoint[],
+  placedAttributes: PositionedAttribute[],
+  nodeObstacles: LayoutRect[],
+): { nodes: PositionedAttribute[]; edges: LayoutEdge[] } {
+  const nodes: PositionedAttribute[] = [];
+  const edges: LayoutEdge[] = [];
+
+  if (attributes.length === 0) {
+    return { nodes, edges };
+  }
+
+  const baseAngle = getOwnerBaseAngle({ x: ownerShape.x, y: ownerShape.y }, neighborPoints);
+
+  attributes.forEach((attribute, index) => {
+    const ring = Math.floor(index / ATTRIBUTE_MAX_PER_RING);
+    const ringIndex = index % ATTRIBUTE_MAX_PER_RING;
+    const ringCount = Math.min(ATTRIBUTE_MAX_PER_RING, attributes.length - ring * ATTRIBUTE_MAX_PER_RING);
+    let angle = baseAngle + (ringIndex / Math.max(1, ringCount)) * Math.PI * 2;
+    let radius = ATTRIBUTE_BASE_RADIUS + ring * ATTRIBUTE_RING_STEP;
+    let node = createAttributeNode(
+      attribute,
+      ownerShape.id,
+      ownerKind,
+      ownerShape.x + Math.cos(angle) * radius,
+      ownerShape.y + Math.sin(angle) * radius,
+      0,
+    );
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      if (!attributeCollides(node, nodeObstacles, [...placedAttributes, ...nodes])) {
+        break;
+      }
+
+      angle += Math.PI / 14;
+      radius += 12;
+      node = createAttributeNode(
+        attribute,
+        ownerShape.id,
+        ownerKind,
+        ownerShape.x + Math.cos(angle) * radius,
+        ownerShape.y + Math.sin(angle) * radius,
+        0,
+      );
+    }
+
+    nodes.push(node);
+    edges.push(connectOwnerToAttribute(ownerShape, node, ATTRIBUTE_OWNER_CURVE_BEND));
+
+    if (attribute.children.length > 0) {
+      const childNodes = placeCompositeChildren(
+        node,
+        attribute,
+        { x: ownerShape.x, y: ownerShape.y },
+        [...placedAttributes, ...nodes],
+        nodeObstacles,
+      );
+      childNodes.nodes.forEach((childNode) => nodes.push(childNode));
+      childNodes.edges.forEach((edge) => edges.push(edge));
+    }
+  });
+
+  return { nodes, edges };
+}
+
+function placeCompositeChildren(
+  rootNode: PositionedAttribute,
+  attribute: AttributeModel,
+  ownerPoint: LayoutPoint,
+  placedAttributes: PositionedAttribute[],
+  nodeObstacles: LayoutRect[],
+): { nodes: PositionedAttribute[]; edges: LayoutEdge[] } {
+  const nodes: PositionedAttribute[] = [];
+  const edges: LayoutEdge[] = [];
+  const outwardAngle = angleBetween(ownerPoint, { x: rootNode.x, y: rootNode.y });
+  const childCount = attribute.children.length;
+
+  attribute.children.forEach((child, index) => {
+    const spread = childCount > 1 ? (index / (childCount - 1) - 0.5) * 0.9 : 0;
+    let angle = outwardAngle + spread;
+    let radius = COMPOSITE_CHILD_RADIUS;
+    let node = createAttributeNode(
+      child,
+      rootNode.ownerId,
+      rootNode.ownerKind,
+      rootNode.x + Math.cos(angle) * radius,
+      rootNode.y + Math.sin(angle) * radius + COMPOSITE_LEVEL_Y_STEP * 0.15,
+      rootNode.level + 1,
+    );
+    node.parentAttributeId = rootNode.id;
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      if (!attributeCollides(node, nodeObstacles, [...placedAttributes, ...nodes])) {
+        break;
+      }
+
+      angle += 0.14;
+      radius += 12;
+      node = createAttributeNode(
+        child,
+        rootNode.ownerId,
+        rootNode.ownerKind,
+        rootNode.x + Math.cos(angle) * radius,
+        rootNode.y + Math.sin(angle) * radius + COMPOSITE_LEVEL_Y_STEP * 0.15,
+        rootNode.level + 1,
+      );
+      node.parentAttributeId = rootNode.id;
+    }
+
+    nodes.push(node);
+    edges.push(connectAttributeToAttribute(rootNode, node));
+
+    if (child.children.length > 0) {
+      const descendants = placeCompositeChildren(
+        node,
+        child,
+        { x: rootNode.x, y: rootNode.y },
+        [...placedAttributes, ...nodes],
+        nodeObstacles,
+      );
+      descendants.nodes.forEach((descendant) => nodes.push(descendant));
+      descendants.edges.forEach((edge) => edges.push(edge));
+    }
+  });
+
+  return { nodes, edges };
 }
 
 function createAttributeLayout(
   entities: EntityPlacement[],
   relationships: PositionedRelationship[],
   relationshipModels: RelationshipModel[],
-  primaryEdges: LayoutEdge[],
   shapesById: Map<string, CoreShape>,
 ): { attributes: PositionedAttribute[]; edges: LayoutEdge[] } {
   const attributes: PositionedAttribute[] = [];
   const edges: LayoutEdge[] = [];
-  const relationshipBiasByEntity = getEntityRelationshipBias(entities, relationships);
-  const nodeObstacles = [
-    ...entities.map((entity) => ({
-      id: entity.id,
-      bounds: getShapeBounds({
-        id: entity.id,
-        kind: "entity",
-        x: entity.x,
-        y: entity.y,
-        width: entity.width,
-        height: entity.height,
-      }),
-    })),
-    ...relationships.map((relationship) => ({
-      id: relationship.id,
-      bounds: getShapeBounds({
-        id: relationship.id,
-        kind: "relationship",
-        x: relationship.x,
-        y: relationship.y,
-        width: relationship.width,
-        height: relationship.height,
-      }),
-    })),
-  ];
-  const coreEdgePaths = primaryEdges
-    .map((edge) => edge.points)
-    .filter((points): points is LayoutPoint[] => points !== undefined);
   const relationshipModelById = new Map(
     relationshipModels.map((relationship) => [relationship.id, relationship]),
   );
+  const nodeObstacles = [
+    ...entities.map((entity) =>
+      expandRect(
+        {
+          minX: entity.x - entity.width / 2,
+          minY: entity.y - entity.height / 2,
+          maxX: entity.x + entity.width / 2,
+          maxY: entity.y + entity.height / 2,
+        },
+        8,
+      ),
+    ),
+    ...relationships.map((relationship) =>
+      expandRect(
+        {
+          minX: relationship.x - relationship.width / 2,
+          minY: relationship.y - relationship.height / 2,
+          maxX: relationship.x + relationship.width / 2,
+          maxY: relationship.y + relationship.height / 2,
+        },
+        8,
+      ),
+    ),
+  ];
 
   entities.forEach((entity) => {
     const ownerShape = shapesById.get(entity.id);
@@ -1284,166 +1071,148 @@ function createAttributeLayout(
       return;
     }
 
-    const metrics = classifyRootAttributes(entity.model.attributes);
-    const sideCounts = new Map<AttributeSide, number>();
-
-    metrics.keyAttributes.forEach((attribute) => {
-      const node = findAttributePlacement(
-        ownerShape,
-        "entity",
-        attribute,
-        ["top", "left", "right"],
-        sideCounts,
-        nodeObstacles,
-        attributes,
-        coreEdgePaths,
-      );
-      attributes.push(node);
-      edges.push(connectOwnerToAttribute(ownerShape, node));
-    });
-
-    const regularSidePriority = getEntityRegularSidePriority(
-      entity,
-      relationshipBiasByEntity.get(entity.id) ?? [],
+    const attributeGroups = classifyRootAttributes(entity.model.attributes);
+    const rootAttributes = [
+      ...attributeGroups.keyAttributes,
+      ...attributeGroups.regularAttributes,
+      ...attributeGroups.compositeAttributes,
+    ];
+    const neighborPoints = relationships
+      .filter((relationship) => relationship.participants.some((participant) => participant.entityId === entity.id))
+      .map((relationship) => ({ x: relationship.x, y: relationship.y }));
+    const layout = placeRootAttributes(
+      ownerShape,
+      "entity",
+      rootAttributes,
+      neighborPoints,
+      attributes,
+      nodeObstacles,
     );
 
-    metrics.regularAttributes.forEach((attribute) => {
-      const node = findAttributePlacement(
-        ownerShape,
-        "entity",
-        attribute,
-        regularSidePriority,
-        sideCounts,
-        nodeObstacles,
-        attributes,
-        coreEdgePaths,
-      );
-      attributes.push(node);
-      edges.push(connectOwnerToAttribute(ownerShape, node));
-    });
-
-    metrics.compositeAttributes.forEach((attribute) => {
-      const rootNode = findAttributePlacement(
-        ownerShape,
-        "entity",
-        attribute,
-        ["bottom", "right", "left"],
-        sideCounts,
-        nodeObstacles,
-        attributes,
-        coreEdgePaths,
-      );
-      let subtree = flattenCompositeSubtree(rootNode, attribute);
-
-      for (let pushStep = 0; pushStep <= ATTRIBUTE_MAX_PUSH_STEPS; pushStep += 1) {
-        if (!subtreeCollides(subtree, entity.id, nodeObstacles, attributes, coreEdgePaths)) {
-          break;
-        }
-
-        subtree = shiftSubtree(subtree, 0, COMPOSITE_PUSH_STEP);
-      }
-
-      subtree.forEach((node) => {
-        attributes.push(node);
-      });
-
-      edges.push(connectOwnerToAttribute(ownerShape, subtree[0]));
-
-      subtree.slice(1).forEach((node) => {
-        const parentNode = subtree.find((candidate) => candidate.id === node.parentAttributeId);
-
-        if (!parentNode) {
-          return;
-        }
-
-        edges.push(connectAttributeToAttribute(parentNode, node));
-      });
-    });
+    layout.nodes.forEach((node) => attributes.push(node));
+    layout.edges.forEach((edge) => edges.push(edge));
   });
 
   relationships.forEach((relationship) => {
     const ownerShape = shapesById.get(relationship.id);
     const relationshipModel = relationshipModelById.get(relationship.id);
-    const sideCounts = new Map<AttributeSide, number>();
 
     if (!ownerShape || !relationshipModel || relationshipModel.attributes.length === 0) {
       return;
     }
 
-    const metrics = classifyRootAttributes(relationshipModel.attributes);
-
-    metrics.keyAttributes.forEach((attribute) => {
-      const node = findAttributePlacement(
-        ownerShape,
-        "relationship",
-        attribute,
-        ["top", "left", "right"],
-        sideCounts,
-        nodeObstacles,
-        attributes,
-        coreEdgePaths,
-      );
-      attributes.push(node);
-      edges.push(connectOwnerToAttribute(ownerShape, node));
+    const attributeGroups = classifyRootAttributes(relationshipModel.attributes);
+    const rootAttributes = [
+      ...attributeGroups.keyAttributes,
+      ...attributeGroups.regularAttributes,
+      ...attributeGroups.compositeAttributes,
+    ];
+    const neighborPoints = relationship.participants.map((participant) => {
+      const entity = entities.find((candidate) => candidate.id === participant.entityId);
+      return entity ? { x: entity.x, y: entity.y } : { x: relationship.x, y: relationship.y };
     });
+    const layout = placeRootAttributes(
+      ownerShape,
+      "relationship",
+      rootAttributes,
+      neighborPoints,
+      attributes,
+      nodeObstacles,
+    );
 
-    const regularSidePriority = getRelationshipAttributeSidePriority(relationship);
+    layout.nodes.forEach((node) => attributes.push(node));
+    layout.edges.forEach((edge) => edges.push(edge));
+  });
 
-    metrics.regularAttributes.forEach((attribute) => {
-      const node = findAttributePlacement(
-        ownerShape,
-        "relationship",
-        attribute,
-        regularSidePriority,
-        sideCounts,
-        nodeObstacles,
-        attributes,
-        coreEdgePaths,
-      );
-      attributes.push(node);
-      edges.push(connectOwnerToAttribute(ownerShape, node));
-    });
+  return { attributes, edges };
+}
 
-    metrics.compositeAttributes.forEach((attribute) => {
-      const rootNode = findAttributePlacement(
-        ownerShape,
-        "relationship",
-        attribute,
-        ["bottom", "right", "left"],
-        sideCounts,
-        nodeObstacles,
-        attributes,
-        coreEdgePaths,
-      );
-      let subtree = flattenCompositeSubtree(rootNode, attribute);
+function createPrimaryEdges(
+  relationships: PositionedRelationship[],
+  shapesById: Map<string, CoreShape>,
+): LayoutEdge[] {
+  const edges: LayoutEdge[] = [];
 
-      for (let pushStep = 0; pushStep <= ATTRIBUTE_MAX_PUSH_STEPS; pushStep += 1) {
-        if (!subtreeCollides(subtree, relationship.id, nodeObstacles, attributes, coreEdgePaths)) {
-          break;
-        }
+  relationships.forEach((relationship) => {
+    const relationshipShape = shapesById.get(relationship.id);
 
-        subtree = shiftSubtree(subtree, 0, COMPOSITE_PUSH_STEP);
+    if (!relationshipShape) {
+      return;
+    }
+
+    relationship.participants.forEach((participant, participantIndex) => {
+      const participantShape = shapesById.get(participant.entityId);
+
+      if (!participantShape) {
+        return;
       }
 
-      subtree.forEach((node) => {
-        attributes.push(node);
-      });
+      let points: LayoutPoint[];
 
-      edges.push(connectOwnerToAttribute(ownerShape, subtree[0]));
+      if (relationship.isSelfRelationship) {
+        const branchDirection = participantIndex === 0 ? -1 : 1;
+        const lateral = participantShape.width / 2 + 56;
+        const vertical = participantShape.height / 2 + 34;
+        const start = getRectBoundaryPoint(
+          participantShape.x,
+          participantShape.y,
+          participantShape.width,
+          participantShape.height,
+          relationshipShape.x,
+          relationshipShape.y + branchDirection * vertical,
+        );
+        const end = getDiamondBoundaryPoint(
+          relationshipShape.x,
+          relationshipShape.y,
+          relationshipShape.width,
+          relationshipShape.height,
+          participantShape.x,
+          participantShape.y + branchDirection * vertical,
+        );
+        const control1 = {
+          x: participantShape.x + (relationshipShape.x >= participantShape.x ? lateral : -lateral),
+          y: participantShape.y + branchDirection * vertical,
+        };
+        const control2 = {
+          x: relationshipShape.x + (relationshipShape.x >= participantShape.x ? -34 : 34),
+          y: relationshipShape.y + branchDirection * 42,
+        };
+        points = [start, control1, control2, end];
+      } else {
+        const start = getShapeBoundaryPoint(participantShape, {
+          x: relationshipShape.x,
+          y: relationshipShape.y,
+        });
+        const end = getShapeBoundaryPoint(relationshipShape, {
+          x: participantShape.x,
+          y: participantShape.y,
+        });
+        const bendAmount =
+          relationship.participants.length === 2
+            ? getBalancedOffset(participantIndex, 20)
+            : getBalancedOffset(participantIndex, 26);
+        points = createCurvedEdge(start, end, bendAmount);
+      }
 
-      subtree.slice(1).forEach((node) => {
-        const parentNode = subtree.find((candidate) => candidate.id === node.parentAttributeId);
+      const labelPoint = getPolylineMidpoint(points);
 
-        if (!parentNode) {
-          return;
-        }
-
-        edges.push(connectAttributeToAttribute(parentNode, node));
+      edges.push({
+        id: `${relationship.id}-participant-${participantIndex}`,
+        kind: "entity-relationship",
+        x1: points[0].x,
+        y1: points[0].y,
+        x2: points[points.length - 1].x,
+        y2: points[points.length - 1].y,
+        points,
+        endConstraint: participant.endConstraint,
+        label: participant.roleLabel,
+        labelX: participant.roleLabel ? labelPoint.x : undefined,
+        labelY: participant.roleLabel ? labelPoint.y - 12 : undefined,
       });
     });
   });
 
-  return { attributes, edges };
+  return edges;
 }
 
 function getEdgeBounds(edge: LayoutEdge): LayoutRect {
@@ -1454,10 +1223,8 @@ function getEdgeBounds(edge: LayoutEdge): LayoutRect {
           { x: edge.x1, y: edge.y1 },
           { x: edge.x2, y: edge.y2 },
         ];
-
   const xValues = points.map((point) => point.x);
   const yValues = points.map((point) => point.y);
-
   let minX = Math.min(...xValues);
   let maxX = Math.max(...xValues);
   let minY = Math.min(...yValues);
@@ -1491,12 +1258,7 @@ function normalizeLayout(
   let maxX = -Infinity;
   let maxY = -Infinity;
 
-  const includeBounds = (
-    nextMinX: number,
-    nextMinY: number,
-    nextMaxX: number,
-    nextMaxY: number,
-  ) => {
+  const includeBounds = (nextMinX: number, nextMinY: number, nextMaxX: number, nextMaxY: number) => {
     minX = Math.min(minX, nextMinX);
     minY = Math.min(minY, nextMinY);
     maxX = Math.max(maxX, nextMaxX);
@@ -1512,6 +1274,15 @@ function normalizeLayout(
     );
   });
 
+  relationships.forEach((relationship) => {
+    includeBounds(
+      relationship.x - relationship.width / 2,
+      relationship.y - relationship.height / 2,
+      relationship.x + relationship.width / 2,
+      relationship.y + relationship.height / 2,
+    );
+  });
+
   attributes.forEach((attribute) => {
     const ringOffset = attribute.isMultivalued ? 6 : 0;
     includeBounds(
@@ -1519,15 +1290,6 @@ function normalizeLayout(
       attribute.y - attribute.ry - ringOffset,
       attribute.x + attribute.rx + ringOffset,
       attribute.y + attribute.ry + ringOffset,
-    );
-  });
-
-  relationships.forEach((relationship) => {
-    includeBounds(
-      relationship.x - relationship.width / 2,
-      relationship.y - relationship.height / 2,
-      relationship.x + relationship.width / 2,
-      relationship.y + relationship.height / 2,
     );
   });
 
@@ -1601,39 +1363,57 @@ export async function createDiagramLayout(model: {
   entities: EntityModel[];
   relationships: RelationshipModel[];
 }): Promise<DiagramLayout> {
-  const metricsById = new Map<string, EntityMetrics>();
+  const {
+    relationshipInfos,
+    degreesByEntityId,
+    adjacencyWeights,
+  } = buildCoreRelationshipInfo(model.entities, model.relationships);
+  const initialEntities = createInitialEntityPlacements(model.entities, degreesByEntityId);
+  const positionedEntities = runForceLayout(
+    initialEntities,
+    adjacencyWeights,
+    degreesByEntityId,
+  );
+  const positionedRelationships = placeRelationships(
+    relationshipInfos,
+    positionedEntities,
+  );
+  const shapesById = new Map<string, CoreShape>();
 
-  model.entities.forEach((entity) => {
-    metricsById.set(entity.id, getEntityMetrics(entity));
+  positionedEntities.forEach((entity) => {
+    shapesById.set(entity.id, {
+      id: entity.id,
+      kind: "entity",
+      x: entity.x,
+      y: entity.y,
+      width: entity.width,
+      height: entity.height,
+    });
   });
 
-  const primaryLayout = await runPrimaryLayout(model.entities, model.relationships, metricsById);
-  const primaryEdges = createPrimaryEdges(
-    model.relationships,
-    primaryLayout.relationships,
-    primaryLayout.shapesById,
-    primaryLayout.edgeSectionsById,
-  );
+  positionedRelationships.forEach((relationship) => {
+    shapesById.set(relationship.id, {
+      id: relationship.id,
+      kind: "relationship",
+      x: relationship.x,
+      y: relationship.y,
+      width: relationship.width,
+      height: relationship.height,
+    });
+  });
+
+  const primaryEdges = createPrimaryEdges(positionedRelationships, shapesById);
   const attributeLayout = createAttributeLayout(
-    primaryLayout.entities,
-    primaryLayout.relationships,
+    positionedEntities,
+    positionedRelationships,
     model.relationships,
-    primaryEdges,
-    primaryLayout.shapesById,
+    shapesById,
   );
 
   return normalizeLayout(
-    primaryLayout.entities.map(
-      ({
-        model: _model,
-        zoneWidth: _zoneWidth,
-        topExtent: _topExtent,
-        bottomExtent: _bottomExtent,
-        ...entity
-      }) => entity,
-    ),
+    positionedEntities.map(({ model: _model, ...entity }) => entity),
     attributeLayout.attributes,
-    primaryLayout.relationships,
+    positionedRelationships,
     [...primaryEdges, ...attributeLayout.edges],
   );
 }

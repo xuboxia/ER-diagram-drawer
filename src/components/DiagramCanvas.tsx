@@ -40,7 +40,7 @@ export function DiagramCanvas({ layout, errors, zoom, svgRef }: DiagramCanvasPro
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="Generated Chen ER diagram"
-          style={{ minWidth: layout.width * zoom }}
+          style={{ minWidth: Math.max(layout.width * zoom, 1120) }}
         >
           <defs>
             <pattern id="dot-grid" width="28" height="28" patternUnits="userSpaceOnUse">
@@ -54,10 +54,10 @@ export function DiagramCanvas({ layout, errors, zoom, svgRef }: DiagramCanvasPro
           <rect width={layout.width} height={layout.height} fill="#f3f7f4" />
           <rect width={layout.width} height={layout.height} fill="url(#dot-grid)" opacity="0.8" />
           <rect
-            x={18}
-            y={18}
-            width={Math.max(0, layout.width - 36)}
-            height={Math.max(0, layout.height - 36)}
+            x={24}
+            y={24}
+            width={Math.max(0, layout.width - 48)}
+            height={Math.max(0, layout.height - 48)}
             rx={30}
             fill="#fffdf8"
             stroke="#d7e4de"
