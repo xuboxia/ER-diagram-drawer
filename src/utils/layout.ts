@@ -43,6 +43,7 @@ const RELATIONSHIP_PAIR_OFFSET = 82;
 const RELATIONSHIP_TRIPLE_OFFSET = 64;
 const SELF_RELATIONSHIP_DISTANCE = 252;
 const RELATIONSHIP_COLLISION_PADDING = 48;
+const MIN_ENTITY_RELATION_DISTANCE = 96;
 const BINARY_CLUSTER_RADIUS = 285;
 const TERNARY_CLUSTER_RADIUS = 235;
 const CLUSTER_PADDING = 54;
@@ -66,6 +67,7 @@ const COMPOSITE_ATTRIBUTE_Y_OFFSET = 176;
 
 const EDGE_CURVE_STRENGTH = 0.09;
 const EDGE_CURVE_OFFSET = 26;
+const EDGE_OFFSET = 14;
 const MAX_EDGE_CURVE = 34;
 const RELATIONSHIP_NUDGE_DISTANCE = 22;
 const LABEL_PADDING = 10;
@@ -994,6 +996,80 @@ function nudgeRelationshipPoint(
   return { x, y };
 }
 
+function chooseBestRelationshipPoint(
+  basePoint: LayoutPoint,
+  participantEntities: EntityPlacement[],
+  entities: EntityPlacement[],
+  relationships: PositionedRelationship[],
+  relationshipId: string,
+): LayoutPoint {
+  const candidateOffsets = [
+    { x: 0, y: 0 },
+    { x: RELATIONSHIP_NUDGE_DISTANCE, y: 0 },
+    { x: -RELATIONSHIP_NUDGE_DISTANCE, y: 0 },
+    { x: 0, y: RELATIONSHIP_NUDGE_DISTANCE },
+    { x: 0, y: -RELATIONSHIP_NUDGE_DISTANCE },
+    { x: RELATIONSHIP_NUDGE_DISTANCE * 0.75, y: RELATIONSHIP_NUDGE_DISTANCE * 0.6 },
+    { x: -RELATIONSHIP_NUDGE_DISTANCE * 0.75, y: RELATIONSHIP_NUDGE_DISTANCE * 0.6 },
+    { x: RELATIONSHIP_NUDGE_DISTANCE * 0.75, y: -RELATIONSHIP_NUDGE_DISTANCE * 0.6 },
+    { x: -RELATIONSHIP_NUDGE_DISTANCE * 0.75, y: -RELATIONSHIP_NUDGE_DISTANCE * 0.6 },
+  ];
+
+  return candidateOffsets
+    .map((offset) => {
+      const candidate = {
+        x: basePoint.x + offset.x,
+        y: basePoint.y + offset.y,
+      };
+      const candidateRect = expandRect(
+        {
+          minX: candidate.x - RELATIONSHIP_WIDTH / 2,
+          minY: candidate.y - RELATIONSHIP_HEIGHT / 2,
+          maxX: candidate.x + RELATIONSHIP_WIDTH / 2,
+          maxY: candidate.y + RELATIONSHIP_HEIGHT / 2,
+        },
+        RELATIONSHIP_COLLISION_PADDING,
+      );
+      const overlapPenalty =
+        entities.reduce((total, entity) => {
+          const entityRect = expandRect(getEntityBounds(entity), MIN_ENTITY_RELATION_DISTANCE / 2);
+          return total + (rectsOverlap(candidateRect, entityRect) ? 1000 : 0);
+        }, 0) +
+        relationships.reduce((total, relationship) => {
+          if (relationship.id === relationshipId) {
+            return total;
+          }
+
+          const relationshipRect = expandRect(getRelationshipBounds(relationship), MIN_NODE_GAP / 2);
+          return total + (rectsOverlap(candidateRect, relationshipRect) ? 800 : 0);
+        }, 0);
+      const participantDistance = sum(
+        participantEntities.map((entity) => Math.hypot(candidate.x - entity.x, candidate.y - entity.y)),
+      );
+      const nearestOtherEntity = Math.min(
+        ...entities
+          .filter((entity) => !participantEntities.some((participant) => participant.id === entity.id))
+          .map((entity) => Math.hypot(candidate.x - entity.x, candidate.y - entity.y)),
+        Infinity,
+      );
+      const nearestRelationship = Math.min(
+        ...relationships
+          .filter((relationship) => relationship.id !== relationshipId)
+          .map((relationship) => Math.hypot(candidate.x - relationship.x, candidate.y - relationship.y)),
+        Infinity,
+      );
+      const score =
+        nearestOtherEntity * 0.45 +
+        nearestRelationship * 0.25 -
+        participantDistance * 0.18 -
+        Math.hypot(offset.x, offset.y) * 0.4 -
+        overlapPenalty;
+
+      return { candidate, score };
+    })
+    .sort((left, right) => right.score - left.score)[0].candidate;
+}
+
 function refineRelationshipPositions(
   relationships: PositionedRelationship[],
   entities: EntityPlacement[],
@@ -1177,9 +1253,16 @@ function placeRelationships(
       };
     }
 
+    const bestLocalPosition = chooseBestRelationshipPoint(
+      position,
+      participantEntities,
+      entities,
+      positionedRelationships,
+      relationshipInfo.model.id,
+    );
     const nudgedPosition = nudgeRelationshipPoint(
-      position.x,
-      position.y,
+      bestLocalPosition.x,
+      bestLocalPosition.y,
       entities,
       positionedRelationships,
       relationshipInfo.model.id,
@@ -1859,12 +1942,69 @@ function createAttributeLayout(
   return { attributes, edges };
 }
 
+function buildEdgeTrackOffsets(
+  relationships: PositionedRelationship[],
+  shapesById: Map<string, CoreShape>,
+): Map<string, number> {
+  const trackOffsets = new Map<string, number>();
+  const byEntity = new Map<string, Array<{ edgeId: string; angle: number }>>();
+  const byRelationship = new Map<string, Array<{ edgeId: string; angle: number }>>();
+
+  relationships.forEach((relationship) => {
+    const relationshipShape = shapesById.get(relationship.id);
+
+    if (!relationshipShape) {
+      return;
+    }
+
+    relationship.participants.forEach((participant, participantIndex) => {
+      const entityShape = shapesById.get(participant.entityId);
+
+      if (!entityShape) {
+        return;
+      }
+
+      const edgeId = `${relationship.id}-participant-${participantIndex}`;
+      const entityAngle = angleBetween(entityShape, relationshipShape);
+      const relationshipAngle = angleBetween(relationshipShape, entityShape);
+      const entityList = byEntity.get(participant.entityId) ?? [];
+      const relationshipList = byRelationship.get(relationship.id) ?? [];
+
+      entityList.push({ edgeId, angle: entityAngle });
+      relationshipList.push({ edgeId, angle: relationshipAngle });
+      byEntity.set(participant.entityId, entityList);
+      byRelationship.set(relationship.id, relationshipList);
+    });
+  });
+
+  const applyTracks = (groups: Map<string, Array<{ edgeId: string; angle: number }>>, scale: number) => {
+    groups.forEach((entries) => {
+      if (entries.length <= 1) {
+        return;
+      }
+
+      entries
+        .sort((left, right) => left.angle - right.angle)
+        .forEach((entry, index) => {
+          const nextOffset = (trackOffsets.get(entry.edgeId) ?? 0) + getBalancedOffset(index, EDGE_OFFSET * scale);
+          trackOffsets.set(entry.edgeId, nextOffset);
+        });
+    });
+  };
+
+  applyTracks(byEntity, 1);
+  applyTracks(byRelationship, 0.55);
+
+  return trackOffsets;
+}
+
 function createPrimaryEdges(
   relationships: PositionedRelationship[],
   shapesById: Map<string, CoreShape>,
   extraNodeObstacles: LayoutRect[] = [],
 ): LayoutEdge[] {
   const edges: LayoutEdge[] = [];
+  const trackOffsets = buildEdgeTrackOffsets(relationships, shapesById);
   const entityObstacles = [...shapesById.values()]
     .filter((shape) => shape.kind === "entity")
     .map((shape) => expandRect(getShapeBounds(shape), 18));
@@ -1886,39 +2026,39 @@ function createPrimaryEdges(
 
       let points: LayoutPoint[];
       let labelPoint: LayoutPoint | null = null;
+      const edgeId = `${relationship.id}-participant-${participantIndex}`;
+      const trackOffset = trackOffsets.get(edgeId) ?? 0;
 
       if (relationship.isSelfRelationship) {
-        const branchDirection = participantIndex === 0 ? -1 : 1;
-        const lateral = participantShape.width / 2 + 74;
-        const vertical = participantShape.height / 2 + 46;
+        const sideDirection = participantIndex === 0 ? -1 : 1;
+        const topAnchor = {
+          x: participantShape.x + sideDirection * participantShape.width * 0.22,
+          y: relationshipShape.y,
+        };
         const start = getRectBoundaryPoint(
           participantShape.x,
           participantShape.y,
           participantShape.width,
           participantShape.height,
-          relationshipShape.x,
-          relationshipShape.y + branchDirection * vertical,
+          topAnchor.x,
+          topAnchor.y,
         );
         const end = getDiamondBoundaryPoint(
           relationshipShape.x,
           relationshipShape.y,
           relationshipShape.width,
           relationshipShape.height,
-          participantShape.x,
-          participantShape.y + branchDirection * vertical,
+          start.x,
+          start.y,
         );
-        const control1 = {
-          x: participantShape.x + (relationshipShape.x >= participantShape.x ? lateral : -lateral),
-          y: participantShape.y + branchDirection * vertical,
+        const control = {
+          x: participantShape.x + sideDirection * (participantShape.width / 2 + 38),
+          y: participantShape.y - participantShape.height / 2 - 58,
         };
-        const control2 = {
-          x: relationshipShape.x + (relationshipShape.x >= participantShape.x ? -48 : 48),
-          y: relationshipShape.y + branchDirection * 52,
-        };
-        points = [start, control1, control2, end];
+        points = [start, control, end];
         labelPoint = {
-          x: control1.x + (control2.x - control1.x) * 0.4,
-          y: control1.y + (control2.y - control1.y) * 0.4 + branchDirection * 10,
+          x: control.x + sideDirection * 16,
+          y: control.y - 8,
         };
       } else {
         const start = getShapeBoundaryPoint(participantShape, {
@@ -1931,8 +2071,8 @@ function createPrimaryEdges(
         });
         const bendAmount =
           relationship.participants.length === 2
-            ? getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.9)
-            : getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 1.2);
+            ? getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.55) + trackOffset
+            : getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.8) + trackOffset;
         const obstacleRects = entityObstacles.filter((rect) => {
           return !pointInRect({ x: participantShape.x, y: participantShape.y }, rect) &&
             !pointInRect({ x: relationshipShape.x, y: relationshipShape.y }, rect);
@@ -1963,7 +2103,7 @@ function createPrimaryEdges(
       }
 
       edges.push({
-        id: `${relationship.id}-participant-${participantIndex}`,
+        id: edgeId,
         kind: "entity-relationship",
         x1: points[0].x,
         y1: points[0].y,
