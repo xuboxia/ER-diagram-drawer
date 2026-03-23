@@ -32,6 +32,7 @@ const ENTITY_SLOT_ATTRACTION = 0.02;
 const ENTITY_FORCE_ITERATIONS = 180;
 const ENTITY_COLLISION_PADDING = 96;
 const MIN_NODE_GAP = 26;
+const MIN_NODE_DISTANCE = MIN_NODE_GAP;
 const ZONE_ATTRACTION = 0.014;
 const ZONE_SPACING_X = 560;
 const ZONE_SPACING_Y = 420;
@@ -343,6 +344,13 @@ function getPolylineMidpoint(points: LayoutPoint[]): LayoutPoint {
   }
 
   return points[points.length - 1];
+}
+
+function getPointBetween(start: LayoutPoint, end: LayoutPoint, ratio: number): LayoutPoint {
+  return {
+    x: start.x + (end.x - start.x) * ratio,
+    y: start.y + (end.y - start.y) * ratio,
+  };
 }
 
 function classifyRootAttributes(attributes: AttributeModel[]) {
@@ -1233,7 +1241,10 @@ function createCurvedEdge(
     x: (start.x + end.x) / 2,
     y: (start.y + end.y) / 2,
   };
-  const straightBlocked = obstacleRects.some((rect) => pointInRect(midpoint, rect));
+  const straightBlocked = obstacleRects.some((rect) =>
+    [0.25, 0.5, 0.75].some((ratio) => pointInRect(getPointBetween(start, end, ratio), rect)) ||
+    pointInRect(midpoint, rect),
+  );
 
   if (!straightBlocked && length < 220 && Math.abs(bendAmount) < 14) {
     return [start, end];
@@ -1542,6 +1553,209 @@ function placeCompositeChildren(
   return { nodes, edges };
 }
 
+function resolveGlobalCollisions(
+  entities: EntityPlacement[],
+  relationships: PositionedRelationship[],
+  attributes: PositionedAttribute[],
+  edges: LayoutEdge[],
+): {
+  relationships: PositionedRelationship[];
+  attributes: PositionedAttribute[];
+} {
+  const nextRelationships = relationships.map((relationship) => ({ ...relationship }));
+  const nextAttributes = attributes.map((attribute) => ({ ...attribute }));
+  const fixedEntityRects = entities.map((entity) => expandRect(getEntityBounds(entity), MIN_NODE_DISTANCE));
+
+  for (let pass = 0; pass < 18; pass += 1) {
+    const relationshipRects = nextRelationships.map((relationship) =>
+      expandRect(getRelationshipBounds(relationship), MIN_NODE_GAP),
+    );
+    const attributeRects = nextAttributes.map((attribute) =>
+      expandRect(getAttributeBounds(attribute), MIN_ATTRIBUTE_GAP),
+    );
+    const labelRects = edges
+      .filter((edge) => edge.label && edge.labelX !== undefined && edge.labelY !== undefined)
+      .map((edge) => getRoleLabelBounds(edge.label!, edge.labelX!, edge.labelY!));
+
+    nextRelationships.forEach((relationship, relationshipIndex) => {
+      let pushX = 0;
+      let pushY = 0;
+      const currentRect = relationshipRects[relationshipIndex];
+
+      fixedEntityRects.forEach((entityRect, entityIndex) => {
+        if (!rectsOverlap(currentRect, entityRect)) {
+          return;
+        }
+
+        const entity = entities[entityIndex];
+        const dx = relationship.x - entity.x || 1;
+        const dy = relationship.y - entity.y || 1;
+        const distance = Math.hypot(dx, dy) || 1;
+        pushX += (dx / distance) * RELATIONSHIP_NUDGE_DISTANCE;
+        pushY += (dy / distance) * RELATIONSHIP_NUDGE_DISTANCE;
+      });
+
+      relationshipRects.forEach((otherRect, otherIndex) => {
+        if (relationshipIndex === otherIndex || !rectsOverlap(currentRect, otherRect)) {
+          return;
+        }
+
+        const otherRelationship = nextRelationships[otherIndex];
+        const dx = relationship.x - otherRelationship.x || (relationshipIndex < otherIndex ? -1 : 1);
+        const dy = relationship.y - otherRelationship.y || 1;
+        const distance = Math.hypot(dx, dy) || 1;
+        pushX += (dx / distance) * (RELATIONSHIP_NUDGE_DISTANCE * 0.7);
+        pushY += (dy / distance) * (RELATIONSHIP_NUDGE_DISTANCE * 0.7);
+      });
+
+      attributeRects.forEach((attributeRect, attributeIndex) => {
+        if (!rectsOverlap(currentRect, attributeRect)) {
+          return;
+        }
+
+        const attribute = nextAttributes[attributeIndex];
+        const dx = relationship.x - attribute.x || 1;
+        const dy = relationship.y - attribute.y || 1;
+        const distance = Math.hypot(dx, dy) || 1;
+        pushX += (dx / distance) * (RELATIONSHIP_NUDGE_DISTANCE * 0.55);
+        pushY += (dy / distance) * (RELATIONSHIP_NUDGE_DISTANCE * 0.55);
+      });
+
+      labelRects.forEach((labelRect) => {
+        if (!rectsOverlap(currentRect, labelRect)) {
+          return;
+        }
+
+        const labelCenter = {
+          x: (labelRect.minX + labelRect.maxX) / 2,
+          y: (labelRect.minY + labelRect.maxY) / 2,
+        };
+        const dx = relationship.x - labelCenter.x || 1;
+        const dy = relationship.y - labelCenter.y || 1;
+        const distance = Math.hypot(dx, dy) || 1;
+        pushX += (dx / distance) * 8;
+        pushY += (dy / distance) * 8;
+      });
+
+      relationship.x += Math.max(-RELATIONSHIP_NUDGE_DISTANCE, Math.min(RELATIONSHIP_NUDGE_DISTANCE, pushX));
+      relationship.y += Math.max(-RELATIONSHIP_NUDGE_DISTANCE, Math.min(RELATIONSHIP_NUDGE_DISTANCE, pushY));
+    });
+
+    nextAttributes.forEach((attribute, attributeIndex) => {
+      let pushX = 0;
+      let pushY = 0;
+      const currentRect = attributeRects[attributeIndex];
+      const parentAttribute = attribute.parentAttributeId
+        ? nextAttributes.find((candidate) => candidate.id === attribute.parentAttributeId)
+        : null;
+      const ownerPoint = parentAttribute
+        ? { x: parentAttribute.x, y: parentAttribute.y }
+        : attribute.ownerKind === "entity"
+          ? entities.find((entity) => entity.id === attribute.ownerId)
+          : nextRelationships.find((relationship) => relationship.id === attribute.ownerId);
+
+      fixedEntityRects.forEach((entityRect, entityIndex) => {
+        const entity = entities[entityIndex];
+
+        if (entity.id === attribute.ownerId || !rectsOverlap(currentRect, entityRect)) {
+          return;
+        }
+
+        const dx = attribute.x - entity.x || 1;
+        const dy = attribute.y - entity.y || 1;
+        const distance = Math.hypot(dx, dy) || 1;
+        pushX += (dx / distance) * MIN_ATTRIBUTE_GAP;
+        pushY += (dy / distance) * MIN_ATTRIBUTE_GAP;
+      });
+
+      relationshipRects.forEach((relationshipRect, relationshipIndex) => {
+        const relationship = nextRelationships[relationshipIndex];
+
+        if (relationship.id === attribute.ownerId || !rectsOverlap(currentRect, relationshipRect)) {
+          return;
+        }
+
+        const dx = attribute.x - relationship.x || 1;
+        const dy = attribute.y - relationship.y || 1;
+        const distance = Math.hypot(dx, dy) || 1;
+        pushX += (dx / distance) * MIN_ATTRIBUTE_GAP;
+        pushY += (dy / distance) * MIN_ATTRIBUTE_GAP;
+      });
+
+      attributeRects.forEach((otherRect, otherIndex) => {
+        if (attributeIndex === otherIndex || !rectsOverlap(currentRect, otherRect)) {
+          return;
+        }
+
+        const otherAttribute = nextAttributes[otherIndex];
+        const dx = attribute.x - otherAttribute.x || (attributeIndex < otherIndex ? -1 : 1);
+        const dy = attribute.y - otherAttribute.y || 1;
+        const distance = Math.hypot(dx, dy) || 1;
+        pushX += (dx / distance) * (MIN_ATTRIBUTE_GAP * 0.8);
+        pushY += (dy / distance) * (MIN_ATTRIBUTE_GAP * 0.8);
+      });
+
+      labelRects.forEach((labelRect) => {
+        if (!rectsOverlap(currentRect, labelRect)) {
+          return;
+        }
+
+        const labelCenter = {
+          x: (labelRect.minX + labelRect.maxX) / 2,
+          y: (labelRect.minY + labelRect.maxY) / 2,
+        };
+        const dx = attribute.x - labelCenter.x || 1;
+        const dy = attribute.y - labelCenter.y || 1;
+        const distance = Math.hypot(dx, dy) || 1;
+        pushX += (dx / distance) * (MIN_ATTRIBUTE_GAP * 0.8);
+        pushY += (dy / distance) * (MIN_ATTRIBUTE_GAP * 0.8);
+      });
+
+      if (ownerPoint) {
+        const preferredRadius = attribute.parentAttributeId ? COMPOSITE_CHILD_RADIUS : ATTRIBUTE_RADIUS + attribute.level * ATTRIBUTE_RING_STEP;
+        const dx = attribute.x + pushX - ownerPoint.x;
+        const dy = attribute.y + pushY - ownerPoint.y;
+        const angle = Math.atan2(dy || 1, dx || 1);
+        const adjustedRadius = Math.max(preferredRadius, Math.hypot(dx, dy));
+        attribute.x = ownerPoint.x + Math.cos(angle) * adjustedRadius;
+        attribute.y = ownerPoint.y + Math.sin(angle) * adjustedRadius;
+      } else {
+        attribute.x += pushX;
+        attribute.y += pushY;
+      }
+    });
+  }
+
+  return {
+    relationships: nextRelationships,
+    attributes: nextAttributes,
+  };
+}
+
+function rebuildAttributeEdges(
+  attributes: PositionedAttribute[],
+  shapesById: Map<string, CoreShape>,
+): LayoutEdge[] {
+  const attributeById = new Map(attributes.map((attribute) => [attribute.id, attribute]));
+
+  return attributes.flatMap((attribute, index) => {
+    if (attribute.parentAttributeId) {
+      const parent = attributeById.get(attribute.parentAttributeId);
+
+      return parent ? [connectAttributeToAttribute(parent, attribute)] : [];
+    }
+
+    const ownerShape = shapesById.get(attribute.ownerId);
+
+    if (!ownerShape) {
+      return [];
+    }
+
+    const bendAmount = (index % 2 === 0 ? 1 : -1) * EDGE_CURVE_OFFSET * 0.35;
+    return [connectOwnerToAttribute(ownerShape, attribute, bendAmount)];
+  });
+}
+
 function createAttributeLayout(
   entities: EntityPlacement[],
   relationships: PositionedRelationship[],
@@ -1648,6 +1862,7 @@ function createAttributeLayout(
 function createPrimaryEdges(
   relationships: PositionedRelationship[],
   shapesById: Map<string, CoreShape>,
+  extraNodeObstacles: LayoutRect[] = [],
 ): LayoutEdge[] {
   const edges: LayoutEdge[] = [];
   const entityObstacles = [...shapesById.values()]
@@ -1722,7 +1937,7 @@ function createPrimaryEdges(
           return !pointInRect({ x: participantShape.x, y: participantShape.y }, rect) &&
             !pointInRect({ x: relationshipShape.x, y: relationshipShape.y }, rect);
         });
-        points = createCurvedEdge(start, end, bendAmount, obstacleRects);
+        points = createCurvedEdge(start, end, bendAmount, [...obstacleRects, ...extraNodeObstacles]);
       }
 
       const resolvedLabelPoint =
@@ -1732,6 +1947,7 @@ function createPrimaryEdges(
               labelPoint ?? getPolylineMidpoint(points),
               [
                 ...entityObstacles,
+                ...extraNodeObstacles,
                 ...relationships
                   .filter((candidate) => candidate.id !== relationship.id)
                   .map((candidate) => expandRect(getRelationshipBounds(candidate), MIN_NODE_GAP * 0.4)),
@@ -1947,7 +2163,7 @@ export async function createDiagramLayout(model: {
     positionedRelationships,
     positionedEntities,
   );
-  const shapesById = new Map<string, CoreShape>();
+  let shapesById = new Map<string, CoreShape>();
 
   positionedEntities.forEach((entity) => {
     shapesById.set(entity.id, {
@@ -1971,19 +2187,57 @@ export async function createDiagramLayout(model: {
     });
   });
 
-  const primaryEdges = createPrimaryEdges(refinedRelationships, shapesById);
-  const attributeLayout = createAttributeLayout(
+  const initialPrimaryEdges = createPrimaryEdges(refinedRelationships, shapesById);
+  const initialAttributeLayout = createAttributeLayout(
     positionedEntities,
     refinedRelationships,
     model.relationships,
     shapesById,
-    primaryEdges,
+    initialPrimaryEdges,
   );
+  const refinedNodes = resolveGlobalCollisions(
+    positionedEntities,
+    refinedRelationships,
+    initialAttributeLayout.attributes,
+    initialPrimaryEdges,
+  );
+  shapesById = new Map<string, CoreShape>();
+
+  positionedEntities.forEach((entity) => {
+    shapesById.set(entity.id, {
+      id: entity.id,
+      kind: "entity",
+      x: entity.x,
+      y: entity.y,
+      width: entity.width,
+      height: entity.height,
+    });
+  });
+
+  refinedNodes.relationships.forEach((relationship) => {
+    shapesById.set(relationship.id, {
+      id: relationship.id,
+      kind: "relationship",
+      x: relationship.x,
+      y: relationship.y,
+      width: relationship.width,
+      height: relationship.height,
+    });
+  });
+
+  const finalPrimaryEdges = createPrimaryEdges(
+    refinedNodes.relationships,
+    shapesById,
+    refinedNodes.attributes.map((attribute) =>
+      expandRect(getAttributeBounds(attribute), MIN_ATTRIBUTE_GAP / 2),
+    ),
+  );
+  const finalAttributeEdges = rebuildAttributeEdges(refinedNodes.attributes, shapesById);
 
   return normalizeLayout(
     positionedEntities.map(({ model: _model, ...entity }) => entity),
-    attributeLayout.attributes,
-    refinedRelationships,
-    [...primaryEdges, ...attributeLayout.edges],
+    refinedNodes.attributes,
+    refinedNodes.relationships,
+    [...finalPrimaryEdges, ...finalAttributeEdges],
   );
 }

@@ -273,6 +273,20 @@ function toSmoothPath(points: LayoutPoint[]): string {
     return `M ${points[0].x} ${points[0].y} L ${points[1].x} ${points[1].y}`;
   }
 
+  if (points.length === 3) {
+    return (
+      `M ${points[0].x} ${points[0].y} ` +
+      `Q ${points[1].x} ${points[1].y}, ${points[2].x} ${points[2].y}`
+    );
+  }
+
+  if (points.length === 4) {
+    return (
+      `M ${points[0].x} ${points[0].y} ` +
+      `C ${points[1].x} ${points[1].y}, ${points[2].x} ${points[2].y}, ${points[3].x} ${points[3].y}`
+    );
+  }
+
   let path = `M ${points[0].x} ${points[0].y}`;
 
   for (let index = 0; index < points.length - 1; index += 1) {
