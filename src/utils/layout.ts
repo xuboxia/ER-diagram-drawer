@@ -53,6 +53,13 @@ const CLUSTER_PADDING = 54;
 
 const ATTRIBUTE_RADIUS = 196;
 const ATTRIBUTE_BASE_RADIUS = ATTRIBUTE_RADIUS;
+const ATTRIBUTE_CLUSTER_BASE_GAP = 80;
+const ATTRIBUTE_INDEX_RADIUS_STEP = 10;
+const ATTRIBUTE_VERTICAL_MIN_SPACING = 40;
+const ATTRIBUTE_SECTOR_SPAN = (Math.PI * 2) / 3;
+const ATTRIBUTE_COLUMN_CAPACITY = 6;
+const ATTRIBUTE_COLUMN_X_STEP = 30;
+const ATTRIBUTE_OVERFLOW_Y_STEP = 42;
 const ATTRIBUTE_RING_STEP = 72;
 const ATTRIBUTE_MAX_PER_RING = 8;
 const ATTRIBUTE_COLLISION_PADDING = 20;
@@ -140,6 +147,10 @@ function normalizeAngle(angle: number): number {
   }
 
   return nextAngle;
+}
+
+function clampAngle(angle: number, minAngle: number, maxAngle: number): number {
+  return Math.max(minAngle, Math.min(maxAngle, angle));
 }
 
 function polarPoint(centerX: number, centerY: number, radius: number, angle: number): LayoutPoint {
@@ -1470,38 +1481,48 @@ function placeCandidateAttribute(
   );
 }
 
-function getOwnerRadialBaseAngle(ownerShape: CoreShape, neighborPoints: LayoutPoint[]): number {
-  if (neighborPoints.length === 0) {
-    return -Math.PI / 2;
-  }
-
-  const averageNeighbor = {
-    x: sum(neighborPoints.map((point) => point.x)) / neighborPoints.length,
-    y: sum(neighborPoints.map((point) => point.y)) / neighborPoints.length,
-  };
-
-  return normalizeAngle(angleBetween({ x: ownerShape.x, y: ownerShape.y }, averageNeighbor) + Math.PI);
+function getSectorRadius(
+  ownerShape: Pick<CoreShape, "width" | "height">,
+  slotIndex: number,
+  attempt = 0,
+): number {
+  return (
+    Math.max(ownerShape.width / 2, ownerShape.height / 2) +
+    ATTRIBUTE_RX +
+    ATTRIBUTE_CLUSTER_BASE_GAP +
+    slotIndex * ATTRIBUTE_INDEX_RADIUS_STEP +
+    attempt * 10
+  );
 }
 
-function getRadialCandidates(
+function getRightSectorCandidates(
   ownerShape: CoreShape,
   slotIndex: number,
-  ringIndex: number,
-  ringCount: number,
-  baseAngle: number,
+  slotCount: number,
 ): LayoutPoint[] {
   const candidates: LayoutPoint[] = [];
-  const angleStep = (Math.PI * 2) / Math.max(1, ringCount);
-  const angle = baseAngle + slotIndex * angleStep + ringIndex * 0.18;
-  const angleVariants = [0, angleStep * 0.16, -angleStep * 0.16, angleStep * 0.28, -angleStep * 0.28];
+  const localIndex = slotCount <= 1 ? 0 : slotIndex % ATTRIBUTE_COLUMN_CAPACITY;
+  const columnIndex = Math.floor(slotIndex / ATTRIBUTE_COLUMN_CAPACITY);
+  const visibleCount = Math.min(slotCount, ATTRIBUTE_COLUMN_CAPACITY);
+  const normalizedIndex =
+    visibleCount <= 1 ? 0.5 : localIndex / Math.max(1, visibleCount - 1);
+  const baseAngle = -ATTRIBUTE_SECTOR_SPAN / 2 + normalizedIndex * ATTRIBUTE_SECTOR_SPAN;
+  const angleVariants = [0, 0.08, -0.08, 0.15, -0.15];
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const radius = ATTRIBUTE_RADIUS + ringIndex * ATTRIBUTE_RING_STEP + attempt * MIN_ATTRIBUTE_GAP;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const radius =
+      getSectorRadius(ownerShape, slotIndex, attempt) + columnIndex * ATTRIBUTE_COLUMN_X_STEP;
+    const overflowDown = columnIndex * ATTRIBUTE_OVERFLOW_Y_STEP + attempt * 6;
 
     angleVariants.forEach((angleOffset) => {
+      const angle = clampAngle(
+        baseAngle + angleOffset,
+        -ATTRIBUTE_SECTOR_SPAN / 2,
+        ATTRIBUTE_SECTOR_SPAN / 2,
+      );
       candidates.push({
-        x: ownerShape.x + Math.cos(angle + angleOffset) * radius,
-        y: ownerShape.y + Math.sin(angle + angleOffset) * radius,
+        x: ownerShape.x + Math.cos(angle) * radius,
+        y: ownerShape.y + Math.sin(angle) * radius + overflowDown,
       });
     });
   }
@@ -1534,19 +1555,63 @@ function getCompositeRootCandidates(
   slotIndex: number,
   slotCount: number,
 ): LayoutPoint[] {
-  const candidates: LayoutPoint[] = [];
-  const spread = slotCount > 1 ? (slotIndex / (slotCount - 1) - 0.5) * COMPOSITE_FAN_SPREAD : 0;
+  return getRightSectorCandidates(ownerShape, slotIndex, slotCount).map((candidate, index) => ({
+    x: candidate.x + (index % 2 === 0 ? 8 : 0),
+    y: candidate.y + 12,
+  }));
+}
 
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const radius = ATTRIBUTE_RADIUS + 18 + attempt * MIN_ATTRIBUTE_GAP;
-    const angle = Math.PI / 2 + spread;
-    candidates.push({
-      x: ownerShape.x + Math.cos(angle) * radius,
-      y: ownerShape.y + Math.sin(angle) * radius,
+function resolveOwnerAttributeCluster(
+  ownerShape: CoreShape,
+  clusterNodes: PositionedAttribute[],
+  placedAttributes: PositionedAttribute[],
+  nodeObstacles: LayoutRect[],
+): PositionedAttribute[] {
+  if (clusterNodes.length <= 1) {
+    return clusterNodes;
+  }
+
+  const nextNodes = clusterNodes.map((node) => ({ ...node }));
+  const sortedNodes = [...nextNodes].sort((left, right) => left.y - right.y || left.x - right.x);
+  const minClusterX = ownerShape.x + ownerShape.width / 2 + ATTRIBUTE_CLUSTER_BASE_GAP + ATTRIBUTE_RX * 0.6;
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    sortedNodes.forEach((node, index) => {
+      node.x = Math.max(node.x, minClusterX + Math.floor(index / ATTRIBUTE_COLUMN_CAPACITY) * ATTRIBUTE_COLUMN_X_STEP);
+
+      if (index === 0) {
+        return;
+      }
+
+      const previous = sortedNodes[index - 1];
+      const minimumY =
+        previous.y +
+        Math.max(
+          ATTRIBUTE_VERTICAL_MIN_SPACING,
+          previous.ry + node.ry + MIN_ATTRIBUTE_GAP * 0.5,
+        );
+
+      if (node.y < minimumY) {
+        node.y = minimumY;
+      }
+
+      let collisionAttempts = 0;
+
+      while (
+        attributeCollides(node, nodeObstacles, [
+          ...placedAttributes,
+          ...sortedNodes.filter((candidate) => candidate.id !== node.id),
+        ]) &&
+        collisionAttempts < 6
+      ) {
+        node.x += 10;
+        node.y += ATTRIBUTE_VERTICAL_MIN_SPACING * 0.35;
+        collisionAttempts += 1;
+      }
     });
   }
 
-  return candidates;
+  return nextNodes;
 }
 
 function placeRootAttributes(
@@ -1559,51 +1624,29 @@ function placeRootAttributes(
 ): { nodes: PositionedAttribute[]; edges: LayoutEdge[] } {
   const nodes: PositionedAttribute[] = [];
   const edges: LayoutEdge[] = [];
+  const compositeRootModels: AttributeModel[] = [];
 
   if (attributes.length === 0) {
     return { nodes, edges };
   }
 
   const { keyAttributes, regularAttributes, compositeAttributes } = classifyRootAttributes(attributes);
-  const baseAngle = getOwnerRadialBaseAngle(ownerShape, neighborPoints);
+  void neighborPoints;
+  const rightClusterCount = regularAttributes.length + compositeAttributes.length;
+  const rightClusterNodes: PositionedAttribute[] = [];
 
   const placeRegularAttribute = (attribute: AttributeModel, index: number) => {
-    const ringIndex = Math.floor(index / ATTRIBUTE_MAX_PER_RING);
-    const ringSlot = index % ATTRIBUTE_MAX_PER_RING;
-    const ringCount = Math.min(
-      ATTRIBUTE_MAX_PER_RING,
-      regularAttributes.length - ringIndex * ATTRIBUTE_MAX_PER_RING,
-    );
     const node = placeCandidateAttribute(
       attribute,
       ownerShape,
       ownerKind,
-      getRadialCandidates(ownerShape, ringSlot, ringIndex, ringCount, baseAngle),
+      getRightSectorCandidates(ownerShape, index, rightClusterCount),
       placedAttributes,
-      nodes,
+      [...nodes, ...rightClusterNodes],
       nodeObstacles,
       0,
     );
-    nodes.push(node);
-    const bendDirection = index % 2 === 0 ? 1 : -1;
-    edges.push(
-      connectOwnerToAttribute(
-        ownerShape,
-        node,
-        bendDirection * (EDGE_CURVE_OFFSET * 0.55 + ringIndex * 4),
-      ),
-    );
-    if (attribute.children.length > 0) {
-      const childNodes = placeCompositeChildren(
-        node,
-        attribute,
-        { x: ownerShape.x, y: ownerShape.y },
-        [...placedAttributes, ...nodes],
-        nodeObstacles,
-      );
-      childNodes.nodes.forEach((childNode) => nodes.push(childNode));
-      childNodes.edges.forEach((edge) => edges.push(edge));
-    }
+    rightClusterNodes.push(node);
   };
 
   keyAttributes.forEach((attribute, index) => {
@@ -1626,30 +1669,57 @@ function placeRootAttributes(
   });
 
   compositeAttributes.forEach((attribute, index) => {
+    const clusterIndex = regularAttributes.length + index;
     const node = placeCandidateAttribute(
       attribute,
       ownerShape,
       ownerKind,
-      getCompositeRootCandidates(ownerShape, index, compositeAttributes.length),
+      getCompositeRootCandidates(ownerShape, clusterIndex, rightClusterCount),
       placedAttributes,
-      nodes,
+      [...nodes, ...rightClusterNodes],
       nodeObstacles,
       0,
     );
-    nodes.push(node);
-    edges.push(connectOwnerToAttribute(ownerShape, node, 0));
+    rightClusterNodes.push(node);
+    compositeRootModels.push(attribute);
+  });
 
-    if (attribute.children.length > 0) {
-      const childNodes = placeCompositeChildren(
+  const resolvedRightClusterNodes = resolveOwnerAttributeCluster(
+    ownerShape,
+    rightClusterNodes,
+    placedAttributes,
+    nodeObstacles,
+  );
+  const resolvedNodeById = new Map(
+    resolvedRightClusterNodes.map((node) => [node.id, node]),
+  );
+  resolvedRightClusterNodes.forEach((node) => nodes.push(node));
+  resolvedRightClusterNodes.forEach((node) => {
+    edges.push(
+      connectOwnerToAttribute(
+        ownerShape,
         node,
-        attribute,
-        { x: ownerShape.x, y: ownerShape.y },
-        [...placedAttributes, ...nodes],
-        nodeObstacles,
-      );
-      childNodes.nodes.forEach((childNode) => nodes.push(childNode));
-      childNodes.edges.forEach((edge) => edges.push(edge));
+        Math.sign(node.y - ownerShape.y || 1) * ATTRIBUTE_OWNER_CURVE_BEND * 0.35,
+      ),
+    );
+  });
+
+  compositeRootModels.forEach((attribute) => {
+    const rootNode = resolvedNodeById.get(attribute.id);
+
+    if (!rootNode || attribute.children.length === 0) {
+      return;
     }
+
+    const childNodes = placeCompositeChildren(
+      rootNode,
+      attribute,
+      { x: ownerShape.x, y: ownerShape.y },
+      [...placedAttributes, ...nodes],
+      nodeObstacles,
+    );
+    childNodes.nodes.forEach((childNode) => nodes.push(childNode));
+    childNodes.edges.forEach((edge) => edges.push(edge));
   });
 
   return { nodes, edges };
@@ -1668,7 +1738,8 @@ function placeCompositeChildren(
   const childCount = attribute.children.length;
 
   attribute.children.forEach((child, index) => {
-    const spread = childCount > 1 ? (index / (childCount - 1) - 0.5) * COMPOSITE_FAN_SPREAD : 0;
+    const spread =
+      childCount > 1 ? (index / (childCount - 1) - 0.5) * Math.min(COMPOSITE_FAN_SPREAD, 0.9) : 0;
     let angle = outwardAngle + spread;
     let radius = COMPOSITE_CHILD_RADIUS;
     let node = createAttributeNode(
@@ -1687,7 +1758,7 @@ function placeCompositeChildren(
       }
 
       angle += index % 2 === 0 ? 0.16 : -0.16;
-      radius += 18;
+      radius += 14;
       node = createAttributeNode(
         child,
         rootNode.ownerId,
@@ -1876,14 +1947,34 @@ function resolveGlobalCollisions(
         pushY += (dy / distance) * (MIN_ATTRIBUTE_GAP * 0.8);
       });
 
-      if (ownerPoint) {
-        const preferredRadius = attribute.parentAttributeId ? COMPOSITE_CHILD_RADIUS : ATTRIBUTE_RADIUS + attribute.level * ATTRIBUTE_RING_STEP;
+    if (ownerPoint) {
+        const preferredRadius = attribute.parentAttributeId
+          ? COMPOSITE_CHILD_RADIUS
+          : getSectorRadius(
+              attribute.ownerKind === "entity"
+                ? entities.find((entity) => entity.id === attribute.ownerId) ?? {
+                    width: ENTITY_WIDTH,
+                    height: ENTITY_HEIGHT,
+                  }
+                : {
+                    width: RELATIONSHIP_WIDTH,
+                    height: RELATIONSHIP_HEIGHT,
+                  },
+              0,
+            );
         const dx = attribute.x + pushX - ownerPoint.x;
         const dy = attribute.y + pushY - ownerPoint.y;
-        const angle = Math.atan2(dy || 1, dx || 1);
+        const nextAngle = Math.atan2(dy || 1, dx || 1);
+        const constrainedAngle = attribute.parentAttributeId
+          ? nextAngle
+          : clampAngle(nextAngle, -ATTRIBUTE_SECTOR_SPAN / 2, ATTRIBUTE_SECTOR_SPAN / 2);
         const adjustedRadius = Math.max(preferredRadius, Math.hypot(dx, dy));
-        attribute.x = ownerPoint.x + Math.cos(angle) * adjustedRadius;
-        attribute.y = ownerPoint.y + Math.sin(angle) * adjustedRadius;
+        attribute.x = ownerPoint.x + Math.cos(constrainedAngle) * adjustedRadius;
+        attribute.y = ownerPoint.y + Math.sin(constrainedAngle) * adjustedRadius;
+
+        if (!attribute.parentAttributeId && attribute.x < ownerPoint.x + ATTRIBUTE_RX) {
+          attribute.x = ownerPoint.x + ATTRIBUTE_RX + ATTRIBUTE_CLUSTER_BASE_GAP * 0.35;
+        }
       } else {
         attribute.x += pushX;
         attribute.y += pushY;
@@ -1916,7 +2007,7 @@ function rebuildAttributeEdges(
       return [];
     }
 
-    const bendAmount = (index % 2 === 0 ? 1 : -1) * EDGE_CURVE_OFFSET * 0.35;
+    const bendAmount = Math.sign(attribute.y - ownerShape.y || 1) * EDGE_CURVE_OFFSET * 0.18;
     return [connectOwnerToAttribute(ownerShape, attribute, bendAmount)];
   });
 }
