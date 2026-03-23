@@ -42,8 +42,11 @@ const RELATIONSHIP_OFFSET = RELATIONSHIP_DISTANCE;
 const RELATIONSHIP_PAIR_OFFSET = 82;
 const RELATIONSHIP_TRIPLE_OFFSET = 64;
 const SELF_RELATIONSHIP_DISTANCE = 252;
+const SELF_LOOP_RADIUS = 62;
+const SELF_LOOP_OFFSET = 26;
 const RELATIONSHIP_COLLISION_PADDING = 48;
 const MIN_ENTITY_RELATION_DISTANCE = 96;
+const RELATIONSHIP_PADDING = 108;
 const BINARY_CLUSTER_RADIUS = 285;
 const TERNARY_CLUSTER_RADIUS = 235;
 const CLUSTER_PADDING = 54;
@@ -59,16 +62,18 @@ const ATTRIBUTE_OWNER_CURVE_BEND = 24;
 const COMPOSITE_CHILD_SPACING = 122;
 const COMPOSITE_CHILD_RADIUS = COMPOSITE_CHILD_SPACING;
 const COMPOSITE_LEVEL_Y_STEP = 92;
+const COMPOSITE_FAN_SPREAD = 1.25;
 const KEY_ATTRIBUTE_Y_OFFSET = 148;
 const REGULAR_ATTRIBUTE_SIDE_OFFSET = 188;
 const REGULAR_ATTRIBUTE_ROW_GAP = ATTRIBUTE_SPACING;
 const BOTTOM_ATTRIBUTE_Y_OFFSET = 156;
 const COMPOSITE_ATTRIBUTE_Y_OFFSET = 176;
 
-const EDGE_CURVE_STRENGTH = 0.09;
+const EDGE_CURVE_STRENGTH = 0.075;
 const EDGE_CURVE_OFFSET = 26;
 const EDGE_OFFSET = 14;
-const MAX_EDGE_CURVE = 34;
+const EDGE_SEPARATION_OFFSET = 16;
+const MAX_EDGE_CURVE = 28;
 const RELATIONSHIP_NUDGE_DISTANCE = 22;
 const LABEL_PADDING = 10;
 
@@ -901,7 +906,7 @@ function chooseSelfRelationshipAngle(
   entities: EntityPlacement[],
   relationships: PositionedRelationship[],
 ): number {
-  const candidates = [-Math.PI / 2, -Math.PI / 3, -Math.PI / 4];
+  const candidates = [-Math.PI / 2, -Math.PI / 3, (-2 * Math.PI) / 3];
 
   return candidates
     .map((angle) => {
@@ -1032,7 +1037,7 @@ function chooseBestRelationshipPoint(
       );
       const overlapPenalty =
         entities.reduce((total, entity) => {
-          const entityRect = expandRect(getEntityBounds(entity), MIN_ENTITY_RELATION_DISTANCE / 2);
+          const entityRect = expandRect(getEntityBounds(entity), RELATIONSHIP_PADDING / 2);
           return total + (rectsOverlap(candidateRect, entityRect) ? 1000 : 0);
         }, 0) +
         relationships.reduce((total, relationship) => {
@@ -1074,7 +1079,7 @@ function refineRelationshipPositions(
   relationships: PositionedRelationship[],
   entities: EntityPlacement[],
 ): PositionedRelationship[] {
-  const entityBounds = entities.map((entity) => expandRect(getEntityBounds(entity), MIN_NODE_GAP));
+  const entityBounds = entities.map((entity) => expandRect(getEntityBounds(entity), RELATIONSHIP_PADDING / 2));
   const nextRelationships = relationships.map((relationship) => ({ ...relationship }));
 
   for (let pass = 0; pass < 10; pass += 1) {
@@ -1504,6 +1509,46 @@ function getRadialCandidates(
   return candidates;
 }
 
+function getTopArcCandidates(
+  ownerShape: CoreShape,
+  slotIndex: number,
+  slotCount: number,
+): LayoutPoint[] {
+  const candidates: LayoutPoint[] = [];
+  const spread = slotCount > 1 ? (slotIndex / (slotCount - 1) - 0.5) * 0.72 : 0;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const radius = ATTRIBUTE_RADIUS - 10 + attempt * MIN_ATTRIBUTE_GAP;
+    const angle = -Math.PI / 2 + spread;
+    candidates.push({
+      x: ownerShape.x + Math.cos(angle) * radius,
+      y: ownerShape.y + Math.sin(angle) * radius,
+    });
+  }
+
+  return candidates;
+}
+
+function getCompositeRootCandidates(
+  ownerShape: CoreShape,
+  slotIndex: number,
+  slotCount: number,
+): LayoutPoint[] {
+  const candidates: LayoutPoint[] = [];
+  const spread = slotCount > 1 ? (slotIndex / (slotCount - 1) - 0.5) * COMPOSITE_FAN_SPREAD : 0;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const radius = ATTRIBUTE_RADIUS + 18 + attempt * MIN_ATTRIBUTE_GAP;
+    const angle = Math.PI / 2 + spread;
+    candidates.push({
+      x: ownerShape.x + Math.cos(angle) * radius,
+      y: ownerShape.y + Math.sin(angle) * radius,
+    });
+  }
+
+  return candidates;
+}
+
 function placeRootAttributes(
   ownerShape: CoreShape,
   ownerKind: AttributeOwnerKind,
@@ -1520,19 +1565,14 @@ function placeRootAttributes(
   }
 
   const { keyAttributes, regularAttributes, compositeAttributes } = classifyRootAttributes(attributes);
-  const orderedAttributes = [
-    ...keyAttributes,
-    ...regularAttributes,
-    ...compositeAttributes,
-  ];
   const baseAngle = getOwnerRadialBaseAngle(ownerShape, neighborPoints);
 
-  const placeAttribute = (attribute: AttributeModel, index: number) => {
+  const placeRegularAttribute = (attribute: AttributeModel, index: number) => {
     const ringIndex = Math.floor(index / ATTRIBUTE_MAX_PER_RING);
     const ringSlot = index % ATTRIBUTE_MAX_PER_RING;
     const ringCount = Math.min(
       ATTRIBUTE_MAX_PER_RING,
-      orderedAttributes.length - ringIndex * ATTRIBUTE_MAX_PER_RING,
+      regularAttributes.length - ringIndex * ATTRIBUTE_MAX_PER_RING,
     );
     const node = placeCandidateAttribute(
       attribute,
@@ -1566,8 +1606,50 @@ function placeRootAttributes(
     }
   };
 
-  orderedAttributes.forEach((attribute, index) => {
-    placeAttribute(attribute, index);
+  keyAttributes.forEach((attribute, index) => {
+    const node = placeCandidateAttribute(
+      attribute,
+      ownerShape,
+      ownerKind,
+      getTopArcCandidates(ownerShape, index, keyAttributes.length),
+      placedAttributes,
+      nodes,
+      nodeObstacles,
+      0,
+    );
+    nodes.push(node);
+    edges.push(connectOwnerToAttribute(ownerShape, node, 0));
+  });
+
+  regularAttributes.forEach((attribute, index) => {
+    placeRegularAttribute(attribute, index);
+  });
+
+  compositeAttributes.forEach((attribute, index) => {
+    const node = placeCandidateAttribute(
+      attribute,
+      ownerShape,
+      ownerKind,
+      getCompositeRootCandidates(ownerShape, index, compositeAttributes.length),
+      placedAttributes,
+      nodes,
+      nodeObstacles,
+      0,
+    );
+    nodes.push(node);
+    edges.push(connectOwnerToAttribute(ownerShape, node, 0));
+
+    if (attribute.children.length > 0) {
+      const childNodes = placeCompositeChildren(
+        node,
+        attribute,
+        { x: ownerShape.x, y: ownerShape.y },
+        [...placedAttributes, ...nodes],
+        nodeObstacles,
+      );
+      childNodes.nodes.forEach((childNode) => nodes.push(childNode));
+      childNodes.edges.forEach((edge) => edges.push(edge));
+    }
   });
 
   return { nodes, edges };
@@ -1586,7 +1668,7 @@ function placeCompositeChildren(
   const childCount = attribute.children.length;
 
   attribute.children.forEach((child, index) => {
-    const spread = childCount > 1 ? (index / (childCount - 1) - 0.5) * 1.15 : 0;
+    const spread = childCount > 1 ? (index / (childCount - 1) - 0.5) * COMPOSITE_FAN_SPREAD : 0;
     let angle = outwardAngle + spread;
     let radius = COMPOSITE_CHILD_RADIUS;
     let node = createAttributeNode(
@@ -1604,7 +1686,7 @@ function placeCompositeChildren(
         break;
       }
 
-      angle += 0.18;
+      angle += index % 2 === 0 ? 0.16 : -0.16;
       radius += 18;
       node = createAttributeNode(
         child,
@@ -1983,17 +2065,29 @@ function buildEdgeTrackOffsets(
         return;
       }
 
-      entries
-        .sort((left, right) => left.angle - right.angle)
-        .forEach((entry, index) => {
-          const nextOffset = (trackOffsets.get(entry.edgeId) ?? 0) + getBalancedOffset(index, EDGE_OFFSET * scale);
-          trackOffsets.set(entry.edgeId, nextOffset);
-        });
+      const sortedEntries = [...entries].sort((left, right) => left.angle - right.angle);
+
+      sortedEntries.forEach((entry, index) => {
+        const previous = sortedEntries[index - 1];
+        const next = sortedEntries[index + 1];
+        const hasNearbySibling =
+          (previous && Math.abs(entry.angle - previous.angle) < 0.75) ||
+          (next && Math.abs(next.angle - entry.angle) < 0.75);
+
+        if (!hasNearbySibling) {
+          return;
+        }
+
+        const nextOffset =
+          (trackOffsets.get(entry.edgeId) ?? 0) +
+          getBalancedOffset(index, EDGE_SEPARATION_OFFSET * scale);
+        trackOffsets.set(entry.edgeId, nextOffset);
+      });
     });
   };
 
   applyTracks(byEntity, 1);
-  applyTracks(byRelationship, 0.55);
+  applyTracks(byRelationship, 0.65);
 
   return trackOffsets;
 }
@@ -2032,7 +2126,7 @@ function createPrimaryEdges(
       if (relationship.isSelfRelationship) {
         const sideDirection = participantIndex === 0 ? -1 : 1;
         const topAnchor = {
-          x: participantShape.x + sideDirection * participantShape.width * 0.22,
+          x: participantShape.x + sideDirection * (participantShape.width * 0.18 + SELF_LOOP_OFFSET * 0.15),
           y: relationshipShape.y,
         };
         const start = getRectBoundaryPoint(
@@ -2052,13 +2146,13 @@ function createPrimaryEdges(
           start.y,
         );
         const control = {
-          x: participantShape.x + sideDirection * (participantShape.width / 2 + 38),
-          y: participantShape.y - participantShape.height / 2 - 58,
+          x: participantShape.x + sideDirection * (participantShape.width / 2 + SELF_LOOP_RADIUS),
+          y: participantShape.y - participantShape.height / 2 - SELF_LOOP_RADIUS + SELF_LOOP_OFFSET * 0.2,
         };
         points = [start, control, end];
         labelPoint = {
-          x: control.x + sideDirection * 16,
-          y: control.y - 8,
+          x: control.x + sideDirection * 18,
+          y: control.y - 14,
         };
       } else {
         const start = getShapeBoundaryPoint(participantShape, {
@@ -2071,8 +2165,8 @@ function createPrimaryEdges(
         });
         const bendAmount =
           relationship.participants.length === 2
-            ? getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.55) + trackOffset
-            : getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.8) + trackOffset;
+            ? getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.42) + trackOffset
+            : getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.62) + trackOffset;
         const obstacleRects = entityObstacles.filter((rect) => {
           return !pointInRect({ x: participantShape.x, y: participantShape.y }, rect) &&
             !pointInRect({ x: relationshipShape.x, y: relationshipShape.y }, rect);
