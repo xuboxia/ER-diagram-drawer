@@ -1,7 +1,10 @@
+import type { PointerEventHandler } from "react";
 import type { PositionedRelationship } from "../types/diagram";
 
 interface RelationshipNodeProps {
   relationship: PositionedRelationship;
+  isDragging?: boolean;
+  onPointerDown?: PointerEventHandler<SVGGElement>;
 }
 
 function getDiamondPoints(x: number, y: number, width: number, height: number): string {
@@ -16,9 +19,17 @@ function getDiamondPoints(x: number, y: number, width: number, height: number): 
   ].join(" ");
 }
 
-export function RelationshipNode({ relationship }: RelationshipNodeProps) {
+export function RelationshipNode({
+  relationship,
+  isDragging = false,
+  onPointerDown,
+}: RelationshipNodeProps) {
   return (
-    <g>
+    <g
+      onPointerDown={onPointerDown}
+      style={{ cursor: isDragging ? "grabbing" : "grab" }}
+      opacity={isDragging ? 0.94 : 1}
+    >
       <polygon
         points={getDiamondPoints(
           relationship.x,
@@ -27,8 +38,8 @@ export function RelationshipNode({ relationship }: RelationshipNodeProps) {
           relationship.height,
         )}
         fill="#d7ebe1"
-        stroke="#2c4b43"
-        strokeWidth={2.5}
+        stroke={isDragging ? "#205245" : "#2c4b43"}
+        strokeWidth={isDragging ? 3 : 2.5}
       />
       {relationship.kind === "identifying" ? (
         <polygon
@@ -39,7 +50,7 @@ export function RelationshipNode({ relationship }: RelationshipNodeProps) {
             relationship.height - 12,
           )}
           fill="none"
-          stroke="#2c4b43"
+          stroke={isDragging ? "#205245" : "#2c4b43"}
           strokeWidth={2}
         />
       ) : null}

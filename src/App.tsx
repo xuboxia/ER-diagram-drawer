@@ -5,7 +5,7 @@ import { Toolbar } from "./components/Toolbar";
 import { EXAMPLE_INPUT } from "./data/exampleInput";
 import type { DiagramLayout, DiagramModel, ParseIssue } from "./types/diagram";
 import { exportPng, exportSvg } from "./utils/export";
-import { createDiagramLayout } from "./utils/layout";
+import { createDiagramLayout, recomputeLayoutEdges } from "./utils/layout";
 import { parseDiagram } from "./utils/parser";
 
 const DRAFT_STORAGE_KEY = "chen-diagram-generator:draft:v1";
@@ -15,6 +15,8 @@ interface SavedDraft {
   zoom: number;
   savedAt: string;
 }
+
+type DraggableNodeKind = "entity" | "relationship" | "attribute";
 
 function readSavedDraft(): SavedDraft | null {
   if (typeof window === "undefined") {
@@ -147,6 +149,8 @@ function App() {
     saveDraftToStorage(inputValue, zoom);
   }, [inputValue, zoom]);
 
+  const displayedLayout = layout ? recomputeLayoutEdges(layout) : null;
+
   const handleGenerate = () => {
     void applyParseResult(inputValue, "manual");
   };
@@ -174,12 +178,12 @@ function App() {
   };
 
   const handleExportPng = async () => {
-    if (!svgRef.current || !layout) {
+    if (!svgRef.current || !displayedLayout) {
       return;
     }
 
     try {
-      await exportPng(svgRef.current, layout.width, layout.height);
+      await exportPng(svgRef.current, displayedLayout.width, displayedLayout.height);
       setNotice("PNG export finished.");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "PNG export failed.");
@@ -195,7 +199,80 @@ function App() {
     setNotice("SVG export finished.");
   };
 
-  const hasDiagram = diagramModel !== null && layout !== null;
+  const handleNodeMove = (
+    nodeKind: DraggableNodeKind,
+    nodeId: string,
+    nextX: number,
+    nextY: number,
+  ) => {
+    setLayout((currentLayout) => {
+      if (!currentLayout) {
+        return currentLayout;
+      }
+
+      const clampPosition = (
+        width: number,
+        height: number,
+      ) => ({
+        x: Math.max(width / 2 + 24, Math.min(currentLayout.width - width / 2 - 24, nextX)),
+        y: Math.max(height / 2 + 24, Math.min(currentLayout.height - height / 2 - 24, nextY)),
+      });
+
+      if (nodeKind === "entity") {
+        return {
+          ...currentLayout,
+          entities: currentLayout.entities.map((entity) => {
+            if (entity.id !== nodeId) {
+              return entity;
+            }
+
+            const clamped = clampPosition(entity.width, entity.height);
+            return {
+              ...entity,
+              x: clamped.x,
+              y: clamped.y,
+            };
+          }),
+        };
+      }
+
+      if (nodeKind === "relationship") {
+        return {
+          ...currentLayout,
+          relationships: currentLayout.relationships.map((relationship) => {
+            if (relationship.id !== nodeId) {
+              return relationship;
+            }
+
+            const clamped = clampPosition(relationship.width, relationship.height);
+            return {
+              ...relationship,
+              x: clamped.x,
+              y: clamped.y,
+            };
+          }),
+        };
+      }
+
+      return {
+        ...currentLayout,
+        attributes: currentLayout.attributes.map((attribute) => {
+          if (attribute.id !== nodeId) {
+            return attribute;
+          }
+
+          const clamped = clampPosition(attribute.rx * 2, attribute.ry * 2);
+          return {
+            ...attribute,
+            x: clamped.x,
+            y: clamped.y,
+          };
+        }),
+      };
+    });
+  };
+
+  const hasDiagram = diagramModel !== null && displayedLayout !== null;
 
   return (
     <div className="app-shell">
@@ -249,7 +326,8 @@ function App() {
           <p className="panel__description">
             Strong entities render as rectangles, weak entities as double rectangles,
             identifying relationships as double diamonds, and relationship constraints
-            render on the edges using single or double lines plus arrows.
+            render on the edges using single or double lines plus arrows. Drag entities,
+            relationships, or attributes on the canvas to fine-tune the automatic layout.
           </p>
 
           {errors.length > 0 ? (
@@ -265,7 +343,13 @@ function App() {
             </div>
           ) : null}
 
-          <DiagramCanvas layout={layout} errors={errors} zoom={zoom} svgRef={svgRef} />
+          <DiagramCanvas
+            layout={displayedLayout}
+            errors={errors}
+            zoom={zoom}
+            svgRef={svgRef}
+            onNodeMove={handleNodeMove}
+          />
         </section>
       </main>
     </div>

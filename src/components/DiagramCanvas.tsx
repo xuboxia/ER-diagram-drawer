@@ -1,18 +1,120 @@
-import type { RefObject } from "react";
-import type { DiagramLayout, ParseIssue } from "../types/diagram";
+import { useEffect, useState } from "react";
+import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
+import type { DiagramLayout, LayoutPoint, ParseIssue } from "../types/diagram";
 import { AttributeNode } from "./AttributeNode";
 import { EntityNode } from "./EntityNode";
 import { RelationshipEdge } from "./RelationshipEdge";
 import { RelationshipNode } from "./RelationshipNode";
+
+type DraggableNodeKind = "entity" | "relationship" | "attribute";
+
+interface DragState {
+  pointerId: number;
+  nodeKind: DraggableNodeKind;
+  nodeId: string;
+  startPointer: LayoutPoint;
+  startNode: LayoutPoint;
+}
 
 interface DiagramCanvasProps {
   layout: DiagramLayout | null;
   errors: ParseIssue[];
   zoom: number;
   svgRef: RefObject<SVGSVGElement>;
+  onNodeMove: (nodeKind: DraggableNodeKind, nodeId: string, x: number, y: number) => void;
 }
 
-export function DiagramCanvas({ layout, errors, zoom, svgRef }: DiagramCanvasProps) {
+export function DiagramCanvas({ layout, errors, zoom, svgRef, onNodeMove }: DiagramCanvasProps) {
+  const [dragState, setDragState] = useState<DragState | null>(null);
+
+  const getSvgPoint = (clientX: number, clientY: number): LayoutPoint | null => {
+    const svg = svgRef.current;
+
+    if (!svg) {
+      return null;
+    }
+
+    const matrix = svg.getScreenCTM();
+
+    if (!matrix) {
+      return null;
+    }
+
+    const point = svg.createSVGPoint();
+    point.x = clientX;
+    point.y = clientY;
+    const transformed = point.matrixTransform(matrix.inverse());
+
+    return {
+      x: transformed.x,
+      y: transformed.y,
+    };
+  };
+
+  useEffect(() => {
+    if (!dragState) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event: PointerEvent) => {
+      if (event.pointerId !== dragState.pointerId) {
+        return;
+      }
+
+      const point = getSvgPoint(event.clientX, event.clientY);
+
+      if (!point) {
+        return;
+      }
+
+      onNodeMove(
+        dragState.nodeKind,
+        dragState.nodeId,
+        dragState.startNode.x + point.x - dragState.startPointer.x,
+        dragState.startNode.y + point.y - dragState.startPointer.y,
+      );
+    };
+
+    const handlePointerEnd = (event: PointerEvent) => {
+      if (event.pointerId === dragState.pointerId) {
+        setDragState(null);
+      }
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerEnd);
+    window.addEventListener("pointercancel", handlePointerEnd);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerEnd);
+      window.removeEventListener("pointercancel", handlePointerEnd);
+    };
+  }, [dragState, onNodeMove]);
+
+  const createPointerDownHandler = (
+    nodeKind: DraggableNodeKind,
+    nodeId: string,
+    startNode: LayoutPoint,
+  ) => (event: ReactPointerEvent<SVGGElement>) => {
+    const point = getSvgPoint(event.clientX, event.clientY);
+
+    if (!point) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragState({
+      pointerId: event.pointerId,
+      nodeKind,
+      nodeId,
+      startPointer: point,
+      startNode,
+    });
+  };
+
   if (!layout) {
     return (
       <div className="empty-state">
@@ -40,7 +142,7 @@ export function DiagramCanvas({ layout, errors, zoom, svgRef }: DiagramCanvasPro
           preserveAspectRatio="xMidYMid meet"
           role="img"
           aria-label="Generated Chen ER diagram"
-          style={{ minWidth: Math.max(layout.width * zoom, 1120) }}
+          style={{ minWidth: Math.max(layout.width * zoom, 1120), touchAction: "none" }}
         >
           <defs>
             <pattern id="dot-grid" width="28" height="28" patternUnits="userSpaceOnUse">
@@ -70,15 +172,41 @@ export function DiagramCanvas({ layout, errors, zoom, svgRef }: DiagramCanvasPro
           ))}
 
           {layout.relationships.map((relationship) => (
-            <RelationshipNode key={relationship.id} relationship={relationship} />
+            <RelationshipNode
+              key={relationship.id}
+              relationship={relationship}
+              isDragging={
+                dragState?.nodeKind === "relationship" && dragState.nodeId === relationship.id
+              }
+              onPointerDown={createPointerDownHandler("relationship", relationship.id, {
+                x: relationship.x,
+                y: relationship.y,
+              })}
+            />
           ))}
 
           {layout.entities.map((entity) => (
-            <EntityNode key={entity.id} entity={entity} />
+            <EntityNode
+              key={entity.id}
+              entity={entity}
+              isDragging={dragState?.nodeKind === "entity" && dragState.nodeId === entity.id}
+              onPointerDown={createPointerDownHandler("entity", entity.id, {
+                x: entity.x,
+                y: entity.y,
+              })}
+            />
           ))}
 
           {layout.attributes.map((attribute) => (
-            <AttributeNode key={attribute.id} attribute={attribute} />
+            <AttributeNode
+              key={attribute.id}
+              attribute={attribute}
+              isDragging={dragState?.nodeKind === "attribute" && dragState.nodeId === attribute.id}
+              onPointerDown={createPointerDownHandler("attribute", attribute.id, {
+                x: attribute.x,
+                y: attribute.y,
+              })}
+            />
           ))}
         </svg>
       </div>

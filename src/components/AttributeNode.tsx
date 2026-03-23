@@ -1,14 +1,21 @@
+import type { PointerEventHandler } from "react";
 import type { PositionedAttribute } from "../types/diagram";
 
 interface AttributeNodeProps {
   attribute: PositionedAttribute;
+  isDragging?: boolean;
+  onPointerDown?: PointerEventHandler<SVGGElement>;
 }
 
 function getUnderlineWidth(attribute: PositionedAttribute): number {
   return Math.min(attribute.name.length * 6.6, attribute.rx * 1.48);
 }
 
-export function AttributeNode({ attribute }: AttributeNodeProps) {
+export function AttributeNode({
+  attribute,
+  isDragging = false,
+  onPointerDown,
+}: AttributeNodeProps) {
   const fill = attribute.isComposite
     ? "#edf5f0"
     : attribute.isPartialKey
@@ -21,7 +28,11 @@ export function AttributeNode({ attribute }: AttributeNodeProps) {
   const underlineY = attribute.y + 11;
 
   return (
-    <g>
+    <g
+      onPointerDown={onPointerDown}
+      style={{ cursor: isDragging ? "grabbing" : "grab" }}
+      opacity={isDragging ? 0.94 : 1}
+    >
       {attribute.isMultivalued ? (
         <ellipse
           cx={attribute.x}
@@ -29,7 +40,7 @@ export function AttributeNode({ attribute }: AttributeNodeProps) {
           rx={attribute.rx + 6}
           ry={attribute.ry + 4}
           fill="none"
-          stroke="#3f6359"
+          stroke={isDragging ? "#24584a" : "#3f6359"}
           strokeWidth={2}
           strokeDasharray={strokeDasharray}
         />
@@ -41,8 +52,8 @@ export function AttributeNode({ attribute }: AttributeNodeProps) {
         rx={attribute.rx}
         ry={attribute.ry}
         fill={fill}
-        stroke="#3f6359"
-        strokeWidth={2}
+        stroke={isDragging ? "#24584a" : "#3f6359"}
+        strokeWidth={isDragging ? 2.4 : 2}
         strokeDasharray={strokeDasharray}
       />
 

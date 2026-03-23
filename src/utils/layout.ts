@@ -2370,7 +2370,7 @@ function refineAttributeClustersLocally(
 
 function refineRoleLabelsLocally(
   edges: LayoutEdge[],
-  entities: EntityPlacement[],
+  entities: PositionedEntity[],
   relationships: PositionedRelationship[],
   attributes: PositionedAttribute[],
 ): LayoutEdge[] {
@@ -3000,4 +3000,58 @@ export async function createDiagramLayout(model: {
     locallyRefinedRelationships,
     [...finalPrimaryEdgesWithLabelCleanup, ...finalAttributeEdges],
   );
+}
+
+function buildShapesById(
+  entities: PositionedEntity[],
+  relationships: PositionedRelationship[],
+): Map<string, CoreShape> {
+  const shapesById = new Map<string, CoreShape>();
+
+  entities.forEach((entity) => {
+    shapesById.set(entity.id, {
+      id: entity.id,
+      kind: "entity",
+      x: entity.x,
+      y: entity.y,
+      width: entity.width,
+      height: entity.height,
+    });
+  });
+
+  relationships.forEach((relationship) => {
+    shapesById.set(relationship.id, {
+      id: relationship.id,
+      kind: "relationship",
+      x: relationship.x,
+      y: relationship.y,
+      width: relationship.width,
+      height: relationship.height,
+    });
+  });
+
+  return shapesById;
+}
+
+export function recomputeLayoutEdges(layout: DiagramLayout): DiagramLayout {
+  const shapesById = buildShapesById(layout.entities, layout.relationships);
+  const primaryEdges = createPrimaryEdges(
+    layout.relationships,
+    shapesById,
+    layout.attributes.map((attribute) =>
+      expandRect(getAttributeBounds(attribute), MIN_ATTRIBUTE_GAP / 2),
+    ),
+  );
+  const attributeEdges = rebuildAttributeEdges(layout.attributes, shapesById);
+  const refinedPrimaryEdges = refineRoleLabelsLocally(
+    primaryEdges,
+    layout.entities,
+    layout.relationships,
+    layout.attributes,
+  );
+
+  return {
+    ...layout,
+    edges: [...refinedPrimaryEdges, ...attributeEdges],
+  };
 }

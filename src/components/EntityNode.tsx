@@ -1,15 +1,22 @@
+import type { PointerEventHandler } from "react";
 import type { PositionedEntity } from "../types/diagram";
 
 interface EntityNodeProps {
   entity: PositionedEntity;
+  isDragging?: boolean;
+  onPointerDown?: PointerEventHandler<SVGGElement>;
 }
 
-export function EntityNode({ entity }: EntityNodeProps) {
+export function EntityNode({ entity, isDragging = false, onPointerDown }: EntityNodeProps) {
   const x = entity.x - entity.width / 2;
   const y = entity.y - entity.height / 2;
 
   return (
-    <g>
+    <g
+      onPointerDown={onPointerDown}
+      style={{ cursor: isDragging ? "grabbing" : "grab" }}
+      opacity={isDragging ? 0.92 : 1}
+    >
       <rect
         x={x}
         y={y}
@@ -17,8 +24,8 @@ export function EntityNode({ entity }: EntityNodeProps) {
         height={entity.height}
         rx={18}
         fill="#fefcf5"
-        stroke="#2c4b43"
-        strokeWidth={2.5}
+        stroke={isDragging ? "#205245" : "#2c4b43"}
+        strokeWidth={isDragging ? 3 : 2.5}
       />
       {entity.kind === "weak" ? (
         <rect
@@ -28,7 +35,7 @@ export function EntityNode({ entity }: EntityNodeProps) {
           height={entity.height - 16}
           rx={14}
           fill="none"
-          stroke="#2c4b43"
+          stroke={isDragging ? "#205245" : "#2c4b43"}
           strokeWidth={2}
         />
       ) : null}
