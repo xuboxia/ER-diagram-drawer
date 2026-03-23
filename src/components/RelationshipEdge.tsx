@@ -1,7 +1,10 @@
+import type { PointerEventHandler } from "react";
 import type { LayoutEdge, LayoutPoint } from "../types/diagram";
 
 interface RelationshipEdgeProps {
   edge: LayoutEdge;
+  isLabelDragging?: boolean;
+  onLabelPointerDown?: PointerEventHandler<SVGGElement>;
 }
 
 const DOUBLE_LINE_GAP = 8;
@@ -355,7 +358,11 @@ function renderPath(points: LayoutPoint[], edgeId: string, suffix: string) {
   );
 }
 
-export function RelationshipEdge({ edge }: RelationshipEdgeProps) {
+export function RelationshipEdge({
+  edge,
+  isLabelDragging = false,
+  onLabelPointerDown,
+}: RelationshipEdgeProps) {
   const isRelationshipEdge = edge.kind === "entity-relationship";
   const isDouble = isRelationshipEdge && edge.endConstraint?.min === 1;
   const hasArrow = isRelationshipEdge && edge.endConstraint?.max === "1";
@@ -410,7 +417,13 @@ export function RelationshipEdge({ edge }: RelationshipEdgeProps) {
       ) : null}
 
       {edge.label && edge.labelX !== undefined && edge.labelY !== undefined ? (
-        <g>
+        <g
+          onPointerDown={onLabelPointerDown}
+          style={{
+            cursor: onLabelPointerDown ? (isLabelDragging ? "grabbing" : "grab") : undefined,
+          }}
+          opacity={isLabelDragging ? 0.96 : 1}
+        >
           <rect
             x={edge.labelX - Math.max(22, edge.label.length * 4.2)}
             y={edge.labelY - 11}
@@ -418,8 +431,8 @@ export function RelationshipEdge({ edge }: RelationshipEdgeProps) {
             height={22}
             rx={11}
             fill="#ffffff"
-            stroke="#bfd1c8"
-            strokeWidth={1.25}
+            stroke={isLabelDragging ? "#7fa79a" : "#bfd1c8"}
+            strokeWidth={isLabelDragging ? 1.8 : 1.25}
           />
           <text
             x={edge.labelX}

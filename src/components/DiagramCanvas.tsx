@@ -6,14 +6,11 @@ import { EntityNode } from "./EntityNode";
 import { RelationshipEdge } from "./RelationshipEdge";
 import { RelationshipNode } from "./RelationshipNode";
 
-type DraggableNodeKind = "entity" | "relationship" | "attribute";
-
 interface DragState {
   pointerId: number;
-  nodeKind: DraggableNodeKind;
-  nodeId: string;
+  labelKey: string;
   startPointer: LayoutPoint;
-  startNode: LayoutPoint;
+  startLabel: LayoutPoint;
 }
 
 interface DiagramCanvasProps {
@@ -21,10 +18,16 @@ interface DiagramCanvasProps {
   errors: ParseIssue[];
   zoom: number;
   svgRef: RefObject<SVGSVGElement>;
-  onNodeMove: (nodeKind: DraggableNodeKind, nodeId: string, x: number, y: number) => void;
+  onSelfRelationshipLabelMove: (labelKey: string, x: number, y: number) => void;
 }
 
-export function DiagramCanvas({ layout, errors, zoom, svgRef, onNodeMove }: DiagramCanvasProps) {
+export function DiagramCanvas({
+  layout,
+  errors,
+  zoom,
+  svgRef,
+  onSelfRelationshipLabelMove,
+}: DiagramCanvasProps) {
   const [dragState, setDragState] = useState<DragState | null>(null);
 
   const getSvgPoint = (clientX: number, clientY: number): LayoutPoint | null => {
@@ -67,11 +70,10 @@ export function DiagramCanvas({ layout, errors, zoom, svgRef, onNodeMove }: Diag
         return;
       }
 
-      onNodeMove(
-        dragState.nodeKind,
-        dragState.nodeId,
-        dragState.startNode.x + point.x - dragState.startPointer.x,
-        dragState.startNode.y + point.y - dragState.startPointer.y,
+      onSelfRelationshipLabelMove(
+        dragState.labelKey,
+        dragState.startLabel.x + point.x - dragState.startPointer.x,
+        dragState.startLabel.y + point.y - dragState.startPointer.y,
       );
     };
 
@@ -90,12 +92,11 @@ export function DiagramCanvas({ layout, errors, zoom, svgRef, onNodeMove }: Diag
       window.removeEventListener("pointerup", handlePointerEnd);
       window.removeEventListener("pointercancel", handlePointerEnd);
     };
-  }, [dragState, onNodeMove]);
+  }, [dragState, onSelfRelationshipLabelMove]);
 
-  const createPointerDownHandler = (
-    nodeKind: DraggableNodeKind,
-    nodeId: string,
-    startNode: LayoutPoint,
+  const createLabelPointerDownHandler = (
+    labelKey: string,
+    startLabel: LayoutPoint,
   ) => (event: ReactPointerEvent<SVGGElement>) => {
     const point = getSvgPoint(event.clientX, event.clientY);
 
@@ -108,10 +109,9 @@ export function DiagramCanvas({ layout, errors, zoom, svgRef, onNodeMove }: Diag
     event.currentTarget.setPointerCapture(event.pointerId);
     setDragState({
       pointerId: event.pointerId,
-      nodeKind,
-      nodeId,
+      labelKey,
       startPointer: point,
-      startNode,
+      startLabel,
     });
   };
 
@@ -168,45 +168,35 @@ export function DiagramCanvas({ layout, errors, zoom, svgRef, onNodeMove }: Diag
           />
 
           {layout.edges.map((edge) => (
-            <RelationshipEdge key={edge.id} edge={edge} />
+            <RelationshipEdge
+              key={edge.id}
+              edge={edge}
+              isLabelDragging={dragState?.labelKey === edge.labelDragKey}
+              onLabelPointerDown={
+                edge.isSelfRelationship &&
+                edge.labelDragKey &&
+                edge.label &&
+                edge.labelX !== undefined &&
+                edge.labelY !== undefined
+                  ? createLabelPointerDownHandler(edge.labelDragKey, {
+                      x: edge.labelX,
+                      y: edge.labelY,
+                    })
+                  : undefined
+              }
+            />
           ))}
 
           {layout.relationships.map((relationship) => (
-            <RelationshipNode
-              key={relationship.id}
-              relationship={relationship}
-              isDragging={
-                dragState?.nodeKind === "relationship" && dragState.nodeId === relationship.id
-              }
-              onPointerDown={createPointerDownHandler("relationship", relationship.id, {
-                x: relationship.x,
-                y: relationship.y,
-              })}
-            />
+            <RelationshipNode key={relationship.id} relationship={relationship} />
           ))}
 
           {layout.entities.map((entity) => (
-            <EntityNode
-              key={entity.id}
-              entity={entity}
-              isDragging={dragState?.nodeKind === "entity" && dragState.nodeId === entity.id}
-              onPointerDown={createPointerDownHandler("entity", entity.id, {
-                x: entity.x,
-                y: entity.y,
-              })}
-            />
+            <EntityNode key={entity.id} entity={entity} />
           ))}
 
           {layout.attributes.map((attribute) => (
-            <AttributeNode
-              key={attribute.id}
-              attribute={attribute}
-              isDragging={dragState?.nodeKind === "attribute" && dragState.nodeId === attribute.id}
-              onPointerDown={createPointerDownHandler("attribute", attribute.id, {
-                x: attribute.x,
-                y: attribute.y,
-              })}
-            />
+            <AttributeNode key={attribute.id} attribute={attribute} />
           ))}
         </svg>
       </div>

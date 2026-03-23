@@ -27,7 +27,7 @@ export function RelationshipNode({
   return (
     <g
       onPointerDown={onPointerDown}
-      style={{ cursor: isDragging ? "grabbing" : "grab" }}
+      style={{ cursor: onPointerDown ? (isDragging ? "grabbing" : "grab") : undefined }}
       opacity={isDragging ? 0.94 : 1}
     >
       <polygon

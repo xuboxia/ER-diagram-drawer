@@ -87,6 +87,11 @@ const RELATIONSHIP_NUDGE_DISTANCE = 22;
 const LOCAL_NUDGE_STEP = 10;
 const MAX_LOCAL_NUDGE_DISTANCE = 42;
 const LABEL_PADDING = 10;
+const MANUAL_ALIGNMENT_THRESHOLD = 56;
+const MANUAL_ENTITY_ALIGNMENT_PULL = 0.22;
+const MANUAL_RELATIONSHIP_MIDPOINT_PULL = 0.82;
+const TERNARY_ENTRY_MIN_SEPARATION = 0.82;
+const TERNARY_ENTRY_GUIDE_OFFSET = 42;
 
 const RELATIONSHIP_DOUBLE_LINE_OFFSET = 4;
 const RELATIONSHIP_ARROW_LENGTH = 18;
@@ -135,6 +140,10 @@ function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
 }
 
+function blendValue(current: number, target: number, strength: number): number {
+  return current + (target - current) * strength;
+}
+
 function angleBetween(from: LayoutPoint, to: LayoutPoint): number {
   return Math.atan2(to.y - from.y, to.x - from.x);
 }
@@ -147,6 +156,20 @@ function normalizeAngle(angle: number): number {
   }
 
   while (nextAngle > Math.PI) {
+    nextAngle -= Math.PI * 2;
+  }
+
+  return nextAngle;
+}
+
+function normalizePositiveAngle(angle: number): number {
+  let nextAngle = angle;
+
+  while (nextAngle < 0) {
+    nextAngle += Math.PI * 2;
+  }
+
+  while (nextAngle >= Math.PI * 2) {
     nextAngle -= Math.PI * 2;
   }
 
@@ -373,6 +396,28 @@ function getPointBetween(start: LayoutPoint, end: LayoutPoint, ratio: number): L
     x: start.x + (end.x - start.x) * ratio,
     y: start.y + (end.y - start.y) * ratio,
   };
+}
+
+function isStraightSegmentClear(
+  start: LayoutPoint,
+  end: LayoutPoint,
+  obstacleRects: LayoutRect[],
+): boolean {
+  if (obstacleRects.length === 0) {
+    return true;
+  }
+
+  const sampleCount = Math.max(8, Math.ceil(Math.hypot(end.x - start.x, end.y - start.y) / 32));
+
+  for (let index = 1; index < sampleCount; index += 1) {
+    const point = getPointBetween(start, end, index / sampleCount);
+
+    if (obstacleRects.some((rect) => pointInRect(point, rect))) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function getRectCenter(rect: LayoutRect): LayoutPoint {
@@ -1429,16 +1474,9 @@ function createCurvedEdge(
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const length = Math.hypot(dx, dy) || 1;
-  const midpoint = {
-    x: (start.x + end.x) / 2,
-    y: (start.y + end.y) / 2,
-  };
-  const straightBlocked = obstacleRects.some((rect) =>
-    [0.25, 0.5, 0.75].some((ratio) => pointInRect(getPointBetween(start, end, ratio), rect)) ||
-    pointInRect(midpoint, rect),
-  );
+  const straightBlocked = !isStraightSegmentClear(start, end, obstacleRects);
 
-  if (!straightBlocked && length < 220 && Math.abs(bendAmount) < 14) {
+  if (!straightBlocked) {
     return [start, end];
   }
 
@@ -2577,6 +2615,66 @@ function buildEdgeTrackOffsets(
   return trackOffsets;
 }
 
+function getTernaryEntryAngles(
+  relationship: PositionedRelationship,
+  shapesById: Map<string, CoreShape>,
+): Map<string, number> {
+  const relationshipShape = shapesById.get(relationship.id);
+
+  if (!relationshipShape || relationship.participants.length !== 3) {
+    return new Map<string, number>();
+  }
+
+  const entries = relationship.participants
+    .map((participant, participantIndex) => {
+      const participantShape = shapesById.get(participant.entityId);
+
+      if (!participantShape) {
+        return null;
+      }
+
+      return {
+        edgeId: `${relationship.id}-participant-${participantIndex}`,
+        angle: normalizePositiveAngle(angleBetween(relationshipShape, participantShape)),
+      };
+    })
+    .filter((entry): entry is { edgeId: string; angle: number } => entry !== null)
+    .sort((left, right) => left.angle - right.angle);
+
+  if (entries.length !== 3) {
+    return new Map<string, number>();
+  }
+
+  const adjustedAngles = new Map(entries.map((entry) => [entry.edgeId, entry.angle]));
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    for (let index = 0; index < entries.length; index += 1) {
+      const current = entries[index];
+      const next = entries[(index + 1) % entries.length];
+      const currentAngle = adjustedAngles.get(current.edgeId) ?? current.angle;
+      const nextAngle =
+        (adjustedAngles.get(next.edgeId) ?? next.angle) +
+        (index === entries.length - 1 ? Math.PI * 2 : 0);
+      const separation = nextAngle - currentAngle;
+
+      if (separation >= TERNARY_ENTRY_MIN_SEPARATION) {
+        continue;
+      }
+
+      const delta = (TERNARY_ENTRY_MIN_SEPARATION - separation) / 2;
+      adjustedAngles.set(current.edgeId, currentAngle - delta);
+      adjustedAngles.set(next.edgeId, (adjustedAngles.get(next.edgeId) ?? next.angle) + delta);
+    }
+  }
+
+  return new Map(
+    [...adjustedAngles.entries()].map(([edgeId, angle]) => [
+      edgeId,
+      normalizeAngle(angle),
+    ]),
+  );
+}
+
 function createPrimaryEdges(
   relationships: PositionedRelationship[],
   shapesById: Map<string, CoreShape>,
@@ -2587,10 +2685,17 @@ function createPrimaryEdges(
   const entityObstacles = [...shapesById.values()]
     .filter((shape) => shape.kind === "entity")
     .map((shape) => expandRect(getShapeBounds(shape), 18));
+  const relationshipObstacles = relationships.map((relationship) =>
+    expandRect(getRelationshipBounds(relationship), MIN_NODE_GAP * 0.45),
+  );
   const labelObstacles: LayoutRect[] = [];
 
   relationships.forEach((relationship) => {
     const relationshipShape = shapesById.get(relationship.id);
+    const ternaryEntryAngles =
+      relationship.participants.length === 3
+        ? getTernaryEntryAngles(relationship, shapesById)
+        : new Map<string, number>();
 
     if (!relationshipShape) {
       return;
@@ -2640,23 +2745,38 @@ function createPrimaryEdges(
           y: control.y - 14,
         };
       } else {
-        const start = getShapeBoundaryPoint(participantShape, {
-          x: relationshipShape.x,
-          y: relationshipShape.y,
-        });
-        const end = getShapeBoundaryPoint(relationshipShape, {
-          x: participantShape.x,
-          y: participantShape.y,
-        });
+        const ternaryEntryAngle = ternaryEntryAngles.get(edgeId);
+        const relationshipGuidePoint =
+          ternaryEntryAngle === undefined
+            ? {
+                x: participantShape.x,
+                y: participantShape.y,
+              }
+            : {
+                x:
+                  relationshipShape.x +
+                  Math.cos(ternaryEntryAngle) *
+                    (relationshipShape.width / 2 + TERNARY_ENTRY_GUIDE_OFFSET),
+                y:
+                  relationshipShape.y +
+                  Math.sin(ternaryEntryAngle) *
+                    (relationshipShape.height / 2 + TERNARY_ENTRY_GUIDE_OFFSET),
+              };
+        const start = getShapeBoundaryPoint(participantShape, relationshipGuidePoint);
+        const end = getShapeBoundaryPoint(relationshipShape, relationshipGuidePoint);
         const bendAmount =
           relationship.participants.length === 2
             ? getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.42) + trackOffset
-            : getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.62) + trackOffset;
-        const obstacleRects = entityObstacles.filter((rect) => {
+            : getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.28) + trackOffset * 0.7;
+        const obstacleRects = [
+          ...entityObstacles,
+          ...relationshipObstacles,
+          ...extraNodeObstacles,
+        ].filter((rect) => {
           return !pointInRect({ x: participantShape.x, y: participantShape.y }, rect) &&
             !pointInRect({ x: relationshipShape.x, y: relationshipShape.y }, rect);
         });
-        points = createCurvedEdge(start, end, bendAmount, [...obstacleRects, ...extraNodeObstacles]);
+        points = createCurvedEdge(start, end, bendAmount, obstacleRects);
       }
 
       const resolvedLabelPoint =
@@ -2693,6 +2813,11 @@ function createPrimaryEdges(
         label: participant.roleLabel,
         labelX: participant.roleLabel ? resolvedLabelPoint.x : undefined,
         labelY: participant.roleLabel ? resolvedLabelPoint.y - 12 : undefined,
+        isSelfRelationship: relationship.isSelfRelationship,
+        labelDragKey:
+          relationship.isSelfRelationship && participant.roleLabel
+            ? `${relationship.id}:${participantIndex === 0 ? "left" : "right"}`
+            : undefined,
       });
     });
   });

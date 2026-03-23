@@ -3,7 +3,7 @@ import { DiagramCanvas } from "./components/DiagramCanvas";
 import { TextInputPanel } from "./components/TextInputPanel";
 import { Toolbar } from "./components/Toolbar";
 import { EXAMPLE_INPUT } from "./data/exampleInput";
-import type { DiagramLayout, DiagramModel, ParseIssue } from "./types/diagram";
+import type { DiagramLayout, DiagramModel, LayoutPoint, ParseIssue } from "./types/diagram";
 import { exportPng, exportSvg } from "./utils/export";
 import { createDiagramLayout, recomputeLayoutEdges } from "./utils/layout";
 import { parseDiagram } from "./utils/parser";
@@ -16,7 +16,7 @@ interface SavedDraft {
   savedAt: string;
 }
 
-type DraggableNodeKind = "entity" | "relationship" | "attribute";
+type SelfRelationshipLabelOverrides = Record<string, LayoutPoint>;
 
 function readSavedDraft(): SavedDraft | null {
   if (typeof window === "undefined") {
@@ -86,6 +86,8 @@ function App() {
   const [diagramModel, setDiagramModel] = useState<DiagramModel | null>(null);
   const [layout, setLayout] = useState<DiagramLayout | null>(null);
   const [errors, setErrors] = useState<ParseIssue[]>([]);
+  const [selfRelationshipLabelOverrides, setSelfRelationshipLabelOverrides] =
+    useState<SelfRelationshipLabelOverrides>({});
   const [notice, setNotice] = useState(
     restoredDraft
       ? `Restored saved draft from ${formatSavedAt(restoredDraft.savedAt)}.`
@@ -114,6 +116,7 @@ function App() {
           setDiagramModel(result.model);
           setLayout(nextLayout);
           setErrors([]);
+          setSelfRelationshipLabelOverrides({});
         });
 
         setNotice(
@@ -149,7 +152,35 @@ function App() {
     saveDraftToStorage(inputValue, zoom);
   }, [inputValue, zoom]);
 
-  const displayedLayout = layout ? recomputeLayoutEdges(layout) : null;
+  const displayedLayout = layout
+    ? (() => {
+        const recomputedLayout = recomputeLayoutEdges(layout);
+
+        return {
+          ...recomputedLayout,
+          edges: recomputedLayout.edges.map((edge) => {
+            const override = edge.labelDragKey
+              ? selfRelationshipLabelOverrides[edge.labelDragKey]
+              : undefined;
+
+            if (
+              !override ||
+              !edge.isSelfRelationship ||
+              edge.labelX === undefined ||
+              edge.labelY === undefined
+            ) {
+              return edge;
+            }
+
+            return {
+              ...edge,
+              labelX: override.x,
+              labelY: override.y,
+            };
+          }),
+        };
+      })()
+    : null;
 
   const handleGenerate = () => {
     void applyParseResult(inputValue, "manual");
@@ -199,77 +230,14 @@ function App() {
     setNotice("SVG export finished.");
   };
 
-  const handleNodeMove = (
-    nodeKind: DraggableNodeKind,
-    nodeId: string,
-    nextX: number,
-    nextY: number,
-  ) => {
-    setLayout((currentLayout) => {
-      if (!currentLayout) {
-        return currentLayout;
-      }
-
-      const clampPosition = (
-        width: number,
-        height: number,
-      ) => ({
-        x: Math.max(width / 2 + 24, Math.min(currentLayout.width - width / 2 - 24, nextX)),
-        y: Math.max(height / 2 + 24, Math.min(currentLayout.height - height / 2 - 24, nextY)),
-      });
-
-      if (nodeKind === "entity") {
-        return {
-          ...currentLayout,
-          entities: currentLayout.entities.map((entity) => {
-            if (entity.id !== nodeId) {
-              return entity;
-            }
-
-            const clamped = clampPosition(entity.width, entity.height);
-            return {
-              ...entity,
-              x: clamped.x,
-              y: clamped.y,
-            };
-          }),
-        };
-      }
-
-      if (nodeKind === "relationship") {
-        return {
-          ...currentLayout,
-          relationships: currentLayout.relationships.map((relationship) => {
-            if (relationship.id !== nodeId) {
-              return relationship;
-            }
-
-            const clamped = clampPosition(relationship.width, relationship.height);
-            return {
-              ...relationship,
-              x: clamped.x,
-              y: clamped.y,
-            };
-          }),
-        };
-      }
-
-      return {
-        ...currentLayout,
-        attributes: currentLayout.attributes.map((attribute) => {
-          if (attribute.id !== nodeId) {
-            return attribute;
-          }
-
-          const clamped = clampPosition(attribute.rx * 2, attribute.ry * 2);
-          return {
-            ...attribute,
-            x: clamped.x,
-            y: clamped.y,
-          };
-        }),
-      };
-    });
+  const handleSelfRelationshipLabelMove = (labelKey: string, nextX: number, nextY: number) => {
+    setSelfRelationshipLabelOverrides((current) => ({
+      ...current,
+      [labelKey]: {
+        x: nextX,
+        y: nextY,
+      },
+    }));
   };
 
   const hasDiagram = diagramModel !== null && displayedLayout !== null;
@@ -326,8 +294,8 @@ function App() {
           <p className="panel__description">
             Strong entities render as rectangles, weak entities as double rectangles,
             identifying relationships as double diamonds, and relationship constraints
-            render on the edges using single or double lines plus arrows. Drag entities,
-            relationships, or attributes on the canvas to fine-tune the automatic layout.
+            render on the edges using single or double lines plus arrows. Self-relationship
+            role labels can be dragged on the canvas to fine-tune their placement.
           </p>
 
           {errors.length > 0 ? (
@@ -348,7 +316,7 @@ function App() {
             errors={errors}
             zoom={zoom}
             svgRef={svgRef}
-            onNodeMove={handleNodeMove}
+            onSelfRelationshipLabelMove={handleSelfRelationshipLabelMove}
           />
         </section>
       </main>

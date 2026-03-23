@@ -14,7 +14,7 @@ export function EntityNode({ entity, isDragging = false, onPointerDown }: Entity
   return (
     <g
       onPointerDown={onPointerDown}
-      style={{ cursor: isDragging ? "grabbing" : "grab" }}
+      style={{ cursor: onPointerDown ? (isDragging ? "grabbing" : "grab") : undefined }}
       opacity={isDragging ? 0.92 : 1}
     >
       <rect

@@ -132,6 +132,8 @@ export interface LayoutEdge {
   label?: string;
   labelX?: number;
   labelY?: number;
+  isSelfRelationship?: boolean;
+  labelDragKey?: string;
   endConstraint?: RelationshipEndConstraint;
 }
 
