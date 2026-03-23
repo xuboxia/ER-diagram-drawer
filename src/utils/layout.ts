@@ -18,44 +18,50 @@ const ATTRIBUTE_RY = 24;
 const RELATIONSHIP_WIDTH = 118;
 const RELATIONSHIP_HEIGHT = 74;
 
-const LAYOUT_MARGIN = 120;
+const LAYOUT_MARGIN = 150;
 const TARGET_PAGE_ASPECT_RATIO = 1.414;
 
-const ENTITY_SPACING = 340;
+const ENTITY_MIN_DISTANCE = 430;
+const ENTITY_SPACING = ENTITY_MIN_DISTANCE;
 const ENTITY_GRID_SPACING_X = ENTITY_SPACING;
-const ENTITY_GRID_SPACING_Y = 270;
-const ENTITY_REPULSION = 92000;
-const ENTITY_ATTRACTION = 0.0032;
-const ENTITY_CENTER_GRAVITY = 0.005;
+const ENTITY_GRID_SPACING_Y = 320;
+const ENTITY_REPULSION = 128000;
+const ENTITY_ATTRACTION = 0.0027;
+const ENTITY_CENTER_GRAVITY = 0.0038;
 const ENTITY_FORCE_ITERATIONS = 180;
-const ENTITY_COLLISION_PADDING = 60;
-const ZONE_ATTRACTION = 0.018;
-const ZONE_SPACING_X = 430;
-const ZONE_SPACING_Y = 320;
+const ENTITY_COLLISION_PADDING = 96;
+const ZONE_ATTRACTION = 0.014;
+const ZONE_SPACING_X = 560;
+const ZONE_SPACING_Y = 420;
 
-const RELATIONSHIP_OFFSET = 34;
-const RELATIONSHIP_PAIR_OFFSET = 58;
-const RELATIONSHIP_TRIPLE_OFFSET = 42;
-const SELF_RELATIONSHIP_DISTANCE = 210;
-const RELATIONSHIP_COLLISION_PADDING = 30;
-const BINARY_CLUSTER_RADIUS = 230;
-const TERNARY_CLUSTER_RADIUS = 190;
+const RELATIONSHIP_DISTANCE = 46;
+const RELATIONSHIP_OFFSET = RELATIONSHIP_DISTANCE;
+const RELATIONSHIP_PAIR_OFFSET = 82;
+const RELATIONSHIP_TRIPLE_OFFSET = 64;
+const SELF_RELATIONSHIP_DISTANCE = 252;
+const RELATIONSHIP_COLLISION_PADDING = 48;
+const BINARY_CLUSTER_RADIUS = 285;
+const TERNARY_CLUSTER_RADIUS = 235;
+const CLUSTER_PADDING = 54;
 
-const ATTRIBUTE_RADIUS = 156;
+const ATTRIBUTE_RADIUS = 196;
 const ATTRIBUTE_BASE_RADIUS = ATTRIBUTE_RADIUS;
-const ATTRIBUTE_RING_STEP = 54;
+const ATTRIBUTE_RING_STEP = 72;
 const ATTRIBUTE_MAX_PER_RING = 8;
-const ATTRIBUTE_COLLISION_PADDING = 14;
-const ATTRIBUTE_OWNER_CURVE_BEND = 18;
-const COMPOSITE_CHILD_RADIUS = 92;
-const COMPOSITE_LEVEL_Y_STEP = 74;
-const KEY_ATTRIBUTE_Y_OFFSET = 126;
-const REGULAR_ATTRIBUTE_SIDE_OFFSET = 146;
-const REGULAR_ATTRIBUTE_ROW_GAP = 74;
-const BOTTOM_ATTRIBUTE_Y_OFFSET = 132;
-const COMPOSITE_ATTRIBUTE_Y_OFFSET = 148;
+const ATTRIBUTE_COLLISION_PADDING = 20;
+const ATTRIBUTE_SPACING = 98;
+const ATTRIBUTE_OWNER_CURVE_BEND = 24;
+const COMPOSITE_CHILD_SPACING = 122;
+const COMPOSITE_CHILD_RADIUS = COMPOSITE_CHILD_SPACING;
+const COMPOSITE_LEVEL_Y_STEP = 92;
+const KEY_ATTRIBUTE_Y_OFFSET = 148;
+const REGULAR_ATTRIBUTE_SIDE_OFFSET = 188;
+const REGULAR_ATTRIBUTE_ROW_GAP = ATTRIBUTE_SPACING;
+const BOTTOM_ATTRIBUTE_Y_OFFSET = 156;
+const COMPOSITE_ATTRIBUTE_Y_OFFSET = 176;
 
-const EDGE_CURVE_STRENGTH = 0.12;
+const EDGE_CURVE_STRENGTH = 0.09;
+const EDGE_CURVE_OFFSET = 26;
 
 const RELATIONSHIP_DOUBLE_LINE_OFFSET = 4;
 const RELATIONSHIP_ARROW_LENGTH = 18;
@@ -507,14 +513,14 @@ function createRelationshipZones(
     const localSlots = getGridSlots(
       componentInfos.length,
       localColumns,
-      ZONE_SPACING_X * 0.56,
-      ZONE_SPACING_Y * 0.48,
+      ZONE_SPACING_X * 0.64,
+      ZONE_SPACING_Y * 0.56,
     );
 
     componentInfos.forEach((relationshipInfo, localIndex) => {
       const slot = localSlots[localIndex] ?? { x: 0, y: 0 };
       const selfShift = relationshipInfo.model.isSelfRelationship
-        ? { x: ZONE_SPACING_X * 0.12, y: -ZONE_SPACING_Y * 0.18 }
+        ? { x: ZONE_SPACING_X * 0.16, y: -ZONE_SPACING_Y * 0.2 }
         : { x: 0, y: 0 };
 
       zones.set(relationshipInfo.model.id, {
@@ -580,7 +586,7 @@ function computeEntityTargetPositions(
       y: sum(zones.map((zone) => zone.y)) / zones.length,
     };
     const degree = degreesByEntityId.get(entity.id) ?? 0;
-    const spreadRadius = Math.max(38, Math.min(110, 74 - degree * 6));
+    const spreadRadius = Math.max(56, Math.min(148, 108 - degree * 5));
     const angle = index * 2.399963229728653;
 
     targetPositions.set(entity.id, {
@@ -866,16 +872,16 @@ function nudgeRelationshipPoint(
 ): LayoutPoint {
   const candidateOffsets = [
     { x: 0, y: 0 },
-    { x: 26, y: 0 },
-    { x: -26, y: 0 },
-    { x: 0, y: 26 },
-    { x: 0, y: -26 },
-    { x: 36, y: 24 },
-    { x: -36, y: 24 },
-    { x: 36, y: -24 },
-    { x: -36, y: -24 },
-    { x: 52, y: 0 },
-    { x: -52, y: 0 },
+    { x: CLUSTER_PADDING, y: 0 },
+    { x: -CLUSTER_PADDING, y: 0 },
+    { x: 0, y: CLUSTER_PADDING },
+    { x: 0, y: -CLUSTER_PADDING },
+    { x: CLUSTER_PADDING + 18, y: CLUSTER_PADDING * 0.7 },
+    { x: -(CLUSTER_PADDING + 18), y: CLUSTER_PADDING * 0.7 },
+    { x: CLUSTER_PADDING + 18, y: -(CLUSTER_PADDING * 0.7) },
+    { x: -(CLUSTER_PADDING + 18), y: -(CLUSTER_PADDING * 0.7) },
+    { x: CLUSTER_PADDING * 1.75, y: 0 },
+    { x: -(CLUSTER_PADDING * 1.75), y: 0 },
   ];
 
   for (const offset of candidateOffsets) {
@@ -898,7 +904,7 @@ function nudgeRelationshipPoint(
             maxX: entity.x + entity.width / 2,
             maxY: entity.y + entity.height / 2,
           },
-          8,
+          18,
         ),
       ),
     );
@@ -1081,7 +1087,7 @@ function createCurvedEdge(
   const length = Math.hypot(dx, dy) || 1;
   const normalX = -dy / length;
   const normalY = dx / length;
-  const maxBend = Math.min(42, length * EDGE_CURVE_STRENGTH);
+  const maxBend = Math.min(64, length * EDGE_CURVE_STRENGTH + EDGE_CURVE_OFFSET * 0.35);
   const preferredBend = Math.max(-maxBend, Math.min(maxBend, bendAmount));
   const fallbackBends = [
     preferredBend,
@@ -1093,12 +1099,12 @@ function createCurvedEdge(
 
   for (const nextBend of fallbackBends) {
     const control1 = {
-      x: start.x + dx * 0.32 + normalX * nextBend,
-      y: start.y + dy * 0.32 + normalY * nextBend,
+      x: start.x + dx * 0.28 + normalX * nextBend,
+      y: start.y + dy * 0.28 + normalY * nextBend,
     };
     const control2 = {
-      x: start.x + dx * 0.68 + normalX * nextBend,
-      y: start.y + dy * 0.68 + normalY * nextBend,
+      x: start.x + dx * 0.72 + normalX * nextBend,
+      y: start.y + dy * 0.72 + normalY * nextBend,
     };
     const midpoint = {
       x: (control1.x + control2.x) / 2,
@@ -1216,11 +1222,11 @@ function getSideCandidates(
   const candidates: LayoutPoint[] = [];
 
   for (let attempt = 0; attempt < 4; attempt += 1) {
-    const outward = attempt * 20;
+    const outward = attempt * 26;
 
     if (side === "top") {
       candidates.push({
-        x: ownerShape.x + getBalancedOffset(slotIndex, ATTRIBUTE_RX * 1.8),
+        x: ownerShape.x + getBalancedOffset(slotIndex, ATTRIBUTE_SPACING),
         y: ownerShape.y - KEY_ATTRIBUTE_Y_OFFSET - outward,
       });
       continue;
@@ -1228,7 +1234,7 @@ function getSideCandidates(
 
     if (side === "bottom") {
       candidates.push({
-        x: ownerShape.x + getBalancedOffset(slotIndex, ATTRIBUTE_RX * 1.9),
+        x: ownerShape.x + getBalancedOffset(slotIndex, ATTRIBUTE_SPACING),
         y: ownerShape.y + BOTTOM_ATTRIBUTE_Y_OFFSET + outward,
       });
       continue;
@@ -1239,7 +1245,7 @@ function getSideCandidates(
         ownerShape.x +
         (side === "left" ? -REGULAR_ATTRIBUTE_SIDE_OFFSET : REGULAR_ATTRIBUTE_SIDE_OFFSET) +
         (side === "left" ? -outward : outward),
-      y: ownerShape.y + getBalancedOffset(slotIndex, REGULAR_ATTRIBUTE_ROW_GAP),
+      y: ownerShape.y + getBalancedOffset(slotIndex, ATTRIBUTE_SPACING),
     });
   }
 
@@ -1340,12 +1346,12 @@ function placeRootAttributes(
       ownerKind,
       [
         {
-          x: ownerShape.x + getBalancedOffset(counts.bottom, ATTRIBUTE_RX * 2.05),
+          x: ownerShape.x + getBalancedOffset(counts.bottom, ATTRIBUTE_SPACING * 1.12),
           y: ownerShape.y + COMPOSITE_ATTRIBUTE_Y_OFFSET,
         },
         {
-          x: ownerShape.x + getBalancedOffset(counts.bottom, ATTRIBUTE_RX * 2.05),
-          y: ownerShape.y + COMPOSITE_ATTRIBUTE_Y_OFFSET + 20,
+          x: ownerShape.x + getBalancedOffset(counts.bottom, ATTRIBUTE_SPACING * 1.12),
+          y: ownerShape.y + COMPOSITE_ATTRIBUTE_Y_OFFSET + 28,
         },
       ],
       placedAttributes,
@@ -1456,7 +1462,7 @@ function createAttributeLayout(
           maxX: entity.x + entity.width / 2,
           maxY: entity.y + entity.height / 2,
         },
-        8,
+        18,
       ),
     ),
     ...relationships.map((relationship) =>
@@ -1467,7 +1473,7 @@ function createAttributeLayout(
           maxX: relationship.x + relationship.width / 2,
           maxY: relationship.y + relationship.height / 2,
         },
-        8,
+        CLUSTER_PADDING * 0.45,
       ),
     ),
   ];
@@ -1542,7 +1548,7 @@ function createPrimaryEdges(
   const edges: LayoutEdge[] = [];
   const entityObstacles = [...shapesById.values()]
     .filter((shape) => shape.kind === "entity")
-    .map((shape) => expandRect(getShapeBounds(shape), 8));
+    .map((shape) => expandRect(getShapeBounds(shape), 18));
 
   relationships.forEach((relationship) => {
     const relationshipShape = shapesById.get(relationship.id);
@@ -1563,8 +1569,8 @@ function createPrimaryEdges(
 
       if (relationship.isSelfRelationship) {
         const branchDirection = participantIndex === 0 ? -1 : 1;
-        const lateral = participantShape.width / 2 + 56;
-        const vertical = participantShape.height / 2 + 34;
+        const lateral = participantShape.width / 2 + 74;
+        const vertical = participantShape.height / 2 + 46;
         const start = getRectBoundaryPoint(
           participantShape.x,
           participantShape.y,
@@ -1586,8 +1592,8 @@ function createPrimaryEdges(
           y: participantShape.y + branchDirection * vertical,
         };
         const control2 = {
-          x: relationshipShape.x + (relationshipShape.x >= participantShape.x ? -34 : 34),
-          y: relationshipShape.y + branchDirection * 42,
+          x: relationshipShape.x + (relationshipShape.x >= participantShape.x ? -48 : 48),
+          y: relationshipShape.y + branchDirection * 52,
         };
         points = [start, control1, control2, end];
         labelPoint = {
@@ -1605,8 +1611,8 @@ function createPrimaryEdges(
         });
         const bendAmount =
           relationship.participants.length === 2
-            ? getBalancedOffset(participantIndex, RELATIONSHIP_OFFSET * 0.55)
-            : getBalancedOffset(participantIndex, RELATIONSHIP_OFFSET * 0.8);
+            ? getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 0.9)
+            : getBalancedOffset(participantIndex, EDGE_CURVE_OFFSET * 1.2);
         const obstacleRects = entityObstacles.filter((rect) => {
           return !pointInRect({ x: participantShape.x, y: participantShape.y }, rect) &&
             !pointInRect({ x: relationshipShape.x, y: relationshipShape.y }, rect);
