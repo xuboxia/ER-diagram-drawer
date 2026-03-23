@@ -16,6 +16,7 @@ interface SavedDraft {
   savedAt: string;
 }
 
+type DraggableNodeKind = "entity" | "relationship" | "attribute";
 type SelfRelationshipLabelOverrides = Record<string, LayoutPoint>;
 
 function readSavedDraft(): SavedDraft | null {
@@ -240,6 +241,76 @@ function App() {
     }));
   };
 
+  const handleNodeMove = (
+    nodeKind: DraggableNodeKind,
+    nodeId: string,
+    nextX: number,
+    nextY: number,
+  ) => {
+    setLayout((currentLayout) => {
+      if (!currentLayout) {
+        return currentLayout;
+      }
+
+      const clampPosition = (width: number, height: number) => ({
+        x: Math.max(width / 2 + 24, Math.min(currentLayout.width - width / 2 - 24, nextX)),
+        y: Math.max(height / 2 + 24, Math.min(currentLayout.height - height / 2 - 24, nextY)),
+      });
+
+      if (nodeKind === "entity") {
+        return {
+          ...currentLayout,
+          entities: currentLayout.entities.map((entity) => {
+            if (entity.id !== nodeId) {
+              return entity;
+            }
+
+            const clamped = clampPosition(entity.width, entity.height);
+            return {
+              ...entity,
+              x: clamped.x,
+              y: clamped.y,
+            };
+          }),
+        };
+      }
+
+      if (nodeKind === "relationship") {
+        return {
+          ...currentLayout,
+          relationships: currentLayout.relationships.map((relationship) => {
+            if (relationship.id !== nodeId) {
+              return relationship;
+            }
+
+            const clamped = clampPosition(relationship.width, relationship.height);
+            return {
+              ...relationship,
+              x: clamped.x,
+              y: clamped.y,
+            };
+          }),
+        };
+      }
+
+      return {
+        ...currentLayout,
+        attributes: currentLayout.attributes.map((attribute) => {
+          if (attribute.id !== nodeId) {
+            return attribute;
+          }
+
+          const clamped = clampPosition(attribute.rx * 2, attribute.ry * 2);
+          return {
+            ...attribute,
+            x: clamped.x,
+            y: clamped.y,
+          };
+        }),
+      };
+    });
+  };
+
   const hasDiagram = diagramModel !== null && displayedLayout !== null;
 
   return (
@@ -294,8 +365,8 @@ function App() {
           <p className="panel__description">
             Strong entities render as rectangles, weak entities as double rectangles,
             identifying relationships as double diamonds, and relationship constraints
-            render on the edges using single or double lines plus arrows. Self-relationship
-            role labels can be dragged on the canvas to fine-tune their placement.
+            render on the edges using single or double lines plus arrows. Drag entities,
+            relationships, attributes, and self-relationship role labels to refine the layout.
           </p>
 
           {errors.length > 0 ? (
@@ -316,6 +387,7 @@ function App() {
             errors={errors}
             zoom={zoom}
             svgRef={svgRef}
+            onNodeMove={handleNodeMove}
             onSelfRelationshipLabelMove={handleSelfRelationshipLabelMove}
           />
         </section>
