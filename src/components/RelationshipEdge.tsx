@@ -281,12 +281,12 @@ function toSmoothPath(points: LayoutPoint[]): string {
     const next = points[index + 1];
     const afterNext = points[index + 2] ?? next;
     const controlPointOne = {
-      x: current.x + (next.x - previous.x) / 6,
-      y: current.y + (next.y - previous.y) / 6,
+      x: current.x + (next.x - previous.x) / 8,
+      y: current.y + (next.y - previous.y) / 8,
     };
     const controlPointTwo = {
-      x: next.x - (afterNext.x - current.x) / 6,
-      y: next.y - (afterNext.y - current.y) / 6,
+      x: next.x - (afterNext.x - current.x) / 8,
+      y: next.y - (afterNext.y - current.y) / 8,
     };
 
     path += ` C ${controlPointOne.x} ${controlPointOne.y}, ${controlPointTwo.x} ${controlPointTwo.y}, ${next.x} ${next.y}`;

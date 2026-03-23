@@ -21,26 +21,31 @@ const RELATIONSHIP_HEIGHT = 74;
 const LAYOUT_MARGIN = 120;
 const TARGET_PAGE_ASPECT_RATIO = 1.414;
 
-const ENTITY_GRID_SPACING_X = 320;
-const ENTITY_GRID_SPACING_Y = 250;
-const ENTITY_REPULSION = 65000;
-const ENTITY_ATTRACTION = 0.0036;
+const ENTITY_SPACING = 340;
+const ENTITY_GRID_SPACING_X = ENTITY_SPACING;
+const ENTITY_GRID_SPACING_Y = 270;
+const ENTITY_REPULSION = 92000;
+const ENTITY_ATTRACTION = 0.0032;
 const ENTITY_CENTER_GRAVITY = 0.005;
 const ENTITY_FORCE_ITERATIONS = 180;
-const ENTITY_COLLISION_PADDING = 46;
+const ENTITY_COLLISION_PADDING = 60;
 
-const RELATIONSHIP_PAIR_OFFSET = 52;
-const RELATIONSHIP_TRIPLE_OFFSET = 38;
+const RELATIONSHIP_OFFSET = 34;
+const RELATIONSHIP_PAIR_OFFSET = 58;
+const RELATIONSHIP_TRIPLE_OFFSET = 42;
 const SELF_RELATIONSHIP_DISTANCE = 210;
 const RELATIONSHIP_COLLISION_PADDING = 30;
 
-const ATTRIBUTE_BASE_RADIUS = 146;
+const ATTRIBUTE_RADIUS = 156;
+const ATTRIBUTE_BASE_RADIUS = ATTRIBUTE_RADIUS;
 const ATTRIBUTE_RING_STEP = 54;
 const ATTRIBUTE_MAX_PER_RING = 8;
 const ATTRIBUTE_COLLISION_PADDING = 14;
 const ATTRIBUTE_OWNER_CURVE_BEND = 18;
 const COMPOSITE_CHILD_RADIUS = 92;
 const COMPOSITE_LEVEL_Y_STEP = 74;
+
+const EDGE_CURVE_STRENGTH = 0.12;
 
 const RELATIONSHIP_DOUBLE_LINE_OFFSET = 4;
 const RELATIONSHIP_ARROW_LENGTH = 18;
@@ -216,6 +221,15 @@ function rectsOverlap(left: LayoutRect, right: LayoutRect): boolean {
     left.minX > right.maxX ||
     left.maxY < right.minY ||
     left.minY > right.maxY
+  );
+}
+
+function pointInRect(point: LayoutPoint, rect: LayoutRect): boolean {
+  return (
+    point.x >= rect.minX &&
+    point.x <= rect.maxX &&
+    point.y >= rect.minY &&
+    point.y <= rect.maxY
   );
 }
 
@@ -455,7 +469,7 @@ function runForceLayout(
     const displacements = new Map(
       orderedEntities.map((entity) => [entity.id, { x: 0, y: 0 }]),
     );
-    const temperature = 42 * (1 - iteration / ENTITY_FORCE_ITERATIONS) + 6;
+    const temperature = 48 * (1 - iteration / ENTITY_FORCE_ITERATIONS) + 8;
 
     for (let leftIndex = 0; leftIndex < orderedEntities.length; leftIndex += 1) {
       for (let rightIndex = leftIndex + 1; rightIndex < orderedEntities.length; rightIndex += 1) {
@@ -516,7 +530,7 @@ function runForceLayout(
         const dx = target.x - source.x;
         const dy = target.y - source.y;
         const distance = Math.max(1, Math.hypot(dx, dy));
-        const idealDistance = ENTITY_GRID_SPACING_X - Math.min(70, (weight - 1) * 26);
+        const idealDistance = ENTITY_SPACING - Math.min(72, (weight - 1) * 24);
         const force = (distance - idealDistance) * ENTITY_ATTRACTION * Math.max(1, weight);
         const unitX = dx / distance;
         const unitY = dy / distance;
@@ -536,8 +550,17 @@ function runForceLayout(
         return;
       }
 
-      displacement.x -= position.x * ENTITY_CENTER_GRAVITY * Math.max(0.8, (degreesByEntityId.get(entity.id) ?? 1) / 2);
+      displacement.x -= position.x * ENTITY_CENTER_GRAVITY * Math.max(0.9, (degreesByEntityId.get(entity.id) ?? 1) / 2);
       displacement.y -= position.y * ENTITY_CENTER_GRAVITY;
+
+      // A small outward pressure keeps medium/low-degree entities from collapsing into the center.
+      const radialDistance = Math.hypot(position.x, position.y) || 1;
+      const radialUnitX = position.x / radialDistance;
+      const radialUnitY = position.y / radialDistance;
+      const degreeScale = Math.max(0, 4 - (degreesByEntityId.get(entity.id) ?? 0));
+      displacement.x += radialUnitX * degreeScale * 1.1;
+      displacement.y += radialUnitY * degreeScale * 0.9;
+
       const length = Math.hypot(displacement.x, displacement.y) || 1;
       const scale = Math.min(temperature, length) / length;
       position.x += displacement.x * scale;
@@ -561,15 +584,17 @@ function runForceLayout(
     });
   }
 
-  return orderedEntities.map((entity) => {
-    const position = positions.get(entity.id);
+  return resolveEntityCollisions(
+    orderedEntities.map((entity) => {
+      const position = positions.get(entity.id);
 
-    return {
-      ...entity,
-      x: position?.x ?? entity.x,
-      y: position?.y ?? entity.y,
-    };
-  });
+      return {
+        ...entity,
+        x: position?.x ?? entity.x,
+        y: position?.y ?? entity.y,
+      };
+    }),
+  );
 }
 
 function findBinaryRelationshipOffsetIndex(
@@ -742,16 +767,22 @@ function placeRelationships(
         y: (left.y + right.y) / 2,
       };
       const angle = angleBetween(left, right) + Math.PI / 2;
-      const { index } = findBinaryRelationshipOffsetIndex(relationshipInfo, relationshipInfos);
-      const offset = getBalancedOffset(index, RELATIONSHIP_PAIR_OFFSET);
+      const { index, total } = findBinaryRelationshipOffsetIndex(relationshipInfo, relationshipInfos);
+      const offset =
+        total > 1
+          ? getBalancedOffset(index, RELATIONSHIP_PAIR_OFFSET)
+          : (index % 2 === 0 ? 1 : -1) * RELATIONSHIP_OFFSET;
       position = polarPoint(midpoint.x, midpoint.y, Math.abs(offset), angle + (offset >= 0 ? 0 : Math.PI));
     } else {
       const centroid = {
         x: sum(participantEntities.map((entity) => entity.x)) / Math.max(1, participantEntities.length),
         y: sum(participantEntities.map((entity) => entity.y)) / Math.max(1, participantEntities.length),
       };
-      const { index } = findTernaryRelationshipOffsetIndex(relationshipInfo, relationshipInfos);
-      const offset = getBalancedOffset(index, RELATIONSHIP_TRIPLE_OFFSET);
+      const { index, total } = findTernaryRelationshipOffsetIndex(relationshipInfo, relationshipInfos);
+      const offset =
+        total > 1
+          ? getBalancedOffset(index, RELATIONSHIP_TRIPLE_OFFSET)
+          : RELATIONSHIP_OFFSET * 0.65;
       position = {
         x: centroid.x + offset,
         y: centroid.y - offset * 0.35,
@@ -809,23 +840,50 @@ function createAttributeNode(
   };
 }
 
-function createCurvedEdge(start: LayoutPoint, end: LayoutPoint, bendAmount: number): LayoutPoint[] {
-  const midX = (start.x + end.x) / 2;
-  const midY = (start.y + end.y) / 2;
+function createCurvedEdge(
+  start: LayoutPoint,
+  end: LayoutPoint,
+  bendAmount: number,
+  obstacleRects: LayoutRect[] = [],
+): LayoutPoint[] {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const length = Math.hypot(dx, dy) || 1;
   const normalX = -dy / length;
   const normalY = dx / length;
-
-  return [
-    start,
-    {
-      x: midX + normalX * bendAmount,
-      y: midY + normalY * bendAmount,
-    },
-    end,
+  const maxBend = Math.min(42, length * EDGE_CURVE_STRENGTH);
+  const preferredBend = Math.max(-maxBend, Math.min(maxBend, bendAmount));
+  const fallbackBends = [
+    preferredBend,
+    -preferredBend,
+    preferredBend * 0.5,
+    -preferredBend * 0.5,
+    0,
   ];
+
+  for (const nextBend of fallbackBends) {
+    const control1 = {
+      x: start.x + dx * 0.32 + normalX * nextBend,
+      y: start.y + dy * 0.32 + normalY * nextBend,
+    };
+    const control2 = {
+      x: start.x + dx * 0.68 + normalX * nextBend,
+      y: start.y + dy * 0.68 + normalY * nextBend,
+    };
+    const midpoint = {
+      x: (control1.x + control2.x) / 2,
+      y: (control1.y + control2.y) / 2,
+    };
+    const intersectsObstacle = obstacleRects.some((rect) =>
+      pointInRect(control1, rect) || pointInRect(control2, rect) || pointInRect(midpoint, rect),
+    );
+
+    if (!intersectsObstacle) {
+      return [start, control1, control2, end];
+    }
+  }
+
+  return [start, end];
 }
 
 function connectOwnerToAttribute(
@@ -918,7 +976,9 @@ function placeRootAttributes(
     const ring = Math.floor(index / ATTRIBUTE_MAX_PER_RING);
     const ringIndex = index % ATTRIBUTE_MAX_PER_RING;
     const ringCount = Math.min(ATTRIBUTE_MAX_PER_RING, attributes.length - ring * ATTRIBUTE_MAX_PER_RING);
-    let angle = baseAngle + (ringIndex / Math.max(1, ringCount)) * Math.PI * 2;
+    const angleStep = (Math.PI * 2) / Math.max(1, ringCount);
+    const ringPhase = ring % 2 === 0 ? 0 : angleStep / 2;
+    let angle = baseAngle + ringPhase + ringIndex * angleStep;
     let radius = ATTRIBUTE_BASE_RADIUS + ring * ATTRIBUTE_RING_STEP;
     let node = createAttributeNode(
       attribute,
@@ -1132,6 +1192,9 @@ function createPrimaryEdges(
   shapesById: Map<string, CoreShape>,
 ): LayoutEdge[] {
   const edges: LayoutEdge[] = [];
+  const entityObstacles = [...shapesById.values()]
+    .filter((shape) => shape.kind === "entity")
+    .map((shape) => expandRect(getShapeBounds(shape), 8));
 
   relationships.forEach((relationship) => {
     const relationshipShape = shapesById.get(relationship.id);
@@ -1189,9 +1252,13 @@ function createPrimaryEdges(
         });
         const bendAmount =
           relationship.participants.length === 2
-            ? getBalancedOffset(participantIndex, 20)
-            : getBalancedOffset(participantIndex, 26);
-        points = createCurvedEdge(start, end, bendAmount);
+            ? getBalancedOffset(participantIndex, RELATIONSHIP_OFFSET * 0.55)
+            : getBalancedOffset(participantIndex, RELATIONSHIP_OFFSET * 0.8);
+        const obstacleRects = entityObstacles.filter((rect) => {
+          return !pointInRect({ x: participantShape.x, y: participantShape.y }, rect) &&
+            !pointInRect({ x: relationshipShape.x, y: relationshipShape.y }, rect);
+        });
+        points = createCurvedEdge(start, end, bendAmount, obstacleRects);
       }
 
       const labelPoint = getPolylineMidpoint(points);
