@@ -7,13 +7,17 @@ interface RelationshipEdgeProps {
   onLabelPointerDown?: PointerEventHandler<SVGGElement>;
 }
 
-const DOUBLE_LINE_GAP = 8;
-const DOUBLE_LINE_OFFSET = DOUBLE_LINE_GAP / 2;
-const ARROW_HEAD_LENGTH = 14;
-const ARROW_HEAD_WIDTH = 9;
-const ARROW_TO_DIAMOND_GAP = 14;
-const MERGE_DISTANCE = 30;
-const CENTER_SHAFT_LENGTH = 10;
+const PARTIAL_PARTICIPATION_STROKE_WIDTH = 1.8;
+const TOTAL_PARTICIPATION_STROKE_WIDTH = 4.2;
+const DEFAULT_EDGE_STROKE_WIDTH = 1.5;
+const EDGE_STROKE = "#111111";
+const ROLE_LABEL_STROKE = "#777777";
+const ROLE_LABEL_ACTIVE_STROKE = "#111111";
+const ROLE_LABEL_FILL = "#ffffff";
+const ARROW_HEAD_LENGTH = 13;
+const ARROW_HEAD_WIDTH = 8;
+const ARROW_TO_DIAMOND_GAP = 13;
+const ARROW_SHAFT_LENGTH = 10;
 
 function getEdgePoints(edge: LayoutEdge): LayoutPoint[] {
   return edge.points && edge.points.length >= 2
@@ -22,17 +26,6 @@ function getEdgePoints(edge: LayoutEdge): LayoutPoint[] {
         { x: edge.x1, y: edge.y1 },
         { x: edge.x2, y: edge.y2 },
       ];
-}
-
-function getSegmentNormal(start: LayoutPoint, end: LayoutPoint) {
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const length = Math.hypot(dx, dy) || 1;
-
-  return {
-    x: -dy / length,
-    y: dx / length,
-  };
 }
 
 function getPolylineLength(points: LayoutPoint[]): number {
@@ -96,34 +89,6 @@ function getPointAtDistance(
   return points[points.length - 1];
 }
 
-function getNormalAtDistance(
-  points: LayoutPoint[],
-  cumulativeLengths: number[],
-  distance: number,
-) {
-  if (points.length < 2) {
-    return { x: 0, y: 0 };
-  }
-
-  if (distance <= 0) {
-    return getSegmentNormal(points[0], points[1]);
-  }
-
-  const totalLength = cumulativeLengths[cumulativeLengths.length - 1] ?? 0;
-
-  if (distance >= totalLength) {
-    return getSegmentNormal(points[points.length - 2], points[points.length - 1]);
-  }
-
-  for (let index = 0; index < points.length - 1; index += 1) {
-    if (distance <= cumulativeLengths[index + 1]) {
-      return getSegmentNormal(points[index], points[index + 1]);
-    }
-  }
-
-  return getSegmentNormal(points[points.length - 2], points[points.length - 1]);
-}
-
 function simplifyPoints(points: LayoutPoint[]): LayoutPoint[] {
   return points.filter((point, index) => {
     if (index === 0) {
@@ -144,7 +109,6 @@ function slicePolyline(points: LayoutPoint[], startDistance: number, endDistance
   const totalLength = cumulativeLengths[cumulativeLengths.length - 1] ?? 0;
   const clampedStart = Math.max(0, Math.min(startDistance, totalLength));
   const clampedEnd = Math.max(clampedStart, Math.min(endDistance, totalLength));
-
   const result: LayoutPoint[] = [
     getPointAtDistance(points, cumulativeLengths, clampedStart),
   ];
@@ -159,108 +123,6 @@ function slicePolyline(points: LayoutPoint[], startDistance: number, endDistance
 
   result.push(getPointAtDistance(points, cumulativeLengths, clampedEnd));
   return simplifyPoints(result);
-}
-
-function offsetPolyline(points: LayoutPoint[], offset: number): LayoutPoint[] {
-  if (points.length <= 1 || offset === 0) {
-    return points;
-  }
-
-  return points.map((point, index) => {
-    if (index === 0) {
-      const normal = getSegmentNormal(points[0], points[1]);
-      return {
-        x: point.x + normal.x * offset,
-        y: point.y + normal.y * offset,
-      };
-    }
-
-    if (index === points.length - 1) {
-      const normal = getSegmentNormal(points[index - 1], points[index]);
-      return {
-        x: point.x + normal.x * offset,
-        y: point.y + normal.y * offset,
-      };
-    }
-
-    const previousNormal = getSegmentNormal(points[index - 1], points[index]);
-    const nextNormal = getSegmentNormal(points[index], points[index + 1]);
-    const miter = {
-      x: previousNormal.x + nextNormal.x,
-      y: previousNormal.y + nextNormal.y,
-    };
-    const miterLength = Math.hypot(miter.x, miter.y);
-
-    if (miterLength < 0.001) {
-      return {
-        x: point.x + previousNormal.x * offset,
-        y: point.y + previousNormal.y * offset,
-      };
-    }
-
-    const unitMiter = {
-      x: miter.x / miterLength,
-      y: miter.y / miterLength,
-    };
-    const alignment =
-      unitMiter.x * previousNormal.x + unitMiter.y * previousNormal.y || 1;
-    const scale = offset / Math.max(0.35, alignment);
-
-    return {
-      x: point.x + unitMiter.x * scale,
-      y: point.y + unitMiter.y * scale,
-    };
-  });
-}
-
-function buildTaperedOffsetPath(
-  points: LayoutPoint[],
-  offset: number,
-  taperStartDistance: number,
-  taperEndDistance: number,
-): LayoutPoint[] {
-  if (points.length <= 1) {
-    return points;
-  }
-
-  if (taperEndDistance <= taperStartDistance) {
-    return offsetPolyline(slicePolyline(points, 0, taperEndDistance), offset);
-  }
-
-  const cumulativeLengths = getCumulativeLengths(points);
-  const prefix = offsetPolyline(slicePolyline(points, 0, taperStartDistance), offset);
-  const sampleDistances = [taperStartDistance];
-
-  cumulativeLengths.forEach((distance) => {
-    if (distance > taperStartDistance && distance < taperEndDistance) {
-      sampleDistances.push(distance);
-    }
-  });
-
-  sampleDistances.push(
-    taperStartDistance + (taperEndDistance - taperStartDistance) / 2,
-    taperEndDistance,
-  );
-
-  const taperedSegment = sampleDistances
-    .sort((left, right) => left - right)
-    .map((distance) => {
-      const point = getPointAtDistance(points, cumulativeLengths, distance);
-      const normal = getNormalAtDistance(points, cumulativeLengths, distance);
-      const progress = (distance - taperStartDistance) / (taperEndDistance - taperStartDistance);
-      const taperedOffset = offset * Math.max(0, 1 - progress);
-
-      return {
-        x: point.x + normal.x * taperedOffset,
-        y: point.y + normal.y * taperedOffset,
-      };
-    });
-
-  return simplifyPoints([...prefix, ...taperedSegment]);
-}
-
-function toPolylinePoints(points: LayoutPoint[]): string {
-  return points.map((point) => `${point.x},${point.y}`).join(" ");
 }
 
 function toSmoothPath(points: LayoutPoint[]): string {
@@ -333,7 +195,6 @@ function getArrowPoints(points: LayoutPoint[]): string {
   const unitY = dy / length;
   const normalX = -unitY;
   const normalY = unitX;
-
   const baseCenterX = end.x - unitX * ARROW_HEAD_LENGTH;
   const baseCenterY = end.y - unitY * ARROW_HEAD_LENGTH;
   const leftX = baseCenterX + normalX * (ARROW_HEAD_WIDTH / 2);
@@ -344,14 +205,24 @@ function getArrowPoints(points: LayoutPoint[]): string {
   return `${end.x},${end.y} ${leftX},${leftY} ${rightX},${rightY}`;
 }
 
-function renderPath(points: LayoutPoint[], edgeId: string, suffix: string) {
+function getRelationshipStrokeWidth(edge: LayoutEdge): number {
+  if (edge.kind !== "entity-relationship") {
+    return DEFAULT_EDGE_STROKE_WIDTH;
+  }
+
+  return edge.endConstraint?.min === 1
+    ? TOTAL_PARTICIPATION_STROKE_WIDTH
+    : PARTIAL_PARTICIPATION_STROKE_WIDTH;
+}
+
+function renderPath(points: LayoutPoint[], edge: LayoutEdge, strokeWidth: number) {
   return (
     <path
-      key={`${edgeId}-${suffix}`}
+      key={`${edge.id}-path`}
       d={toSmoothPath(points)}
       fill="none"
-      stroke="#5a7a70"
-      strokeWidth={2}
+      stroke={EDGE_STROKE}
+      strokeWidth={strokeWidth}
       strokeLinejoin="round"
       strokeLinecap="round"
     />
@@ -364,53 +235,27 @@ export function RelationshipEdge({
   onLabelPointerDown,
 }: RelationshipEdgeProps) {
   const isRelationshipEdge = edge.kind === "entity-relationship";
-  const isDouble = isRelationshipEdge && edge.endConstraint?.min === 1;
   const hasArrow = isRelationshipEdge && edge.endConstraint?.max === "1";
   const points = getEdgePoints(edge);
   const totalLength = getPolylineLength(points);
   const arrowTipDistance = Math.max(0, totalLength - ARROW_TO_DIAMOND_GAP);
   const arrowShaftStartDistance = Math.max(
     0,
-    arrowTipDistance - ARROW_HEAD_LENGTH - CENTER_SHAFT_LENGTH,
+    arrowTipDistance - ARROW_HEAD_LENGTH - ARROW_SHAFT_LENGTH,
   );
-  const mergeStartDistance = Math.max(0, arrowShaftStartDistance - MERGE_DISTANCE);
+  const edgePath = hasArrow ? slicePolyline(points, 0, arrowTipDistance) : points;
   const arrowGuide = hasArrow ? slicePolyline(points, arrowShaftStartDistance, arrowTipDistance) : points;
-  const singleArrowPath = hasArrow ? slicePolyline(points, 0, arrowTipDistance) : points;
-  const upperMergedPath = buildTaperedOffsetPath(
-    points,
-    DOUBLE_LINE_OFFSET,
-    mergeStartDistance,
-    arrowShaftStartDistance,
-  );
-  const lowerMergedPath = buildTaperedOffsetPath(
-    points,
-    -DOUBLE_LINE_OFFSET,
-    mergeStartDistance,
-    arrowShaftStartDistance,
-  );
+  const strokeWidth = getRelationshipStrokeWidth(edge);
 
   return (
     <g>
-      {isDouble && hasArrow ? (
-        <>
-          {upperMergedPath.length >= 2 ? renderPath(upperMergedPath, edge.id, "upper-merge") : null}
-          {lowerMergedPath.length >= 2 ? renderPath(lowerMergedPath, edge.id, "lower-merge") : null}
-          {arrowGuide.length >= 2 ? renderPath(arrowGuide, edge.id, "center-shaft") : null}
-        </>
-      ) : isDouble ? (
-        <>
-          {renderPath(offsetPolyline(points, DOUBLE_LINE_OFFSET), edge.id, "upper")}
-          {renderPath(offsetPolyline(points, -DOUBLE_LINE_OFFSET), edge.id, "lower")}
-        </>
-      ) : (
-        renderPath(singleArrowPath, edge.id, "single")
-      )}
+      {edgePath.length >= 2 ? renderPath(edgePath, edge, strokeWidth) : null}
 
       {hasArrow && arrowGuide.length >= 2 ? (
         <polygon
           points={getArrowPoints(arrowGuide)}
-          fill="#5a7a70"
-          stroke="#5a7a70"
+          fill={EDGE_STROKE}
+          stroke={EDGE_STROKE}
           strokeWidth={1}
           strokeLinejoin="round"
         />
@@ -429,18 +274,19 @@ export function RelationshipEdge({
             y={edge.labelY - 11}
             width={Math.max(44, edge.label.length * 8.4)}
             height={22}
-            rx={11}
-            fill="#ffffff"
-            stroke={isLabelDragging ? "#7fa79a" : "#bfd1c8"}
-            strokeWidth={isLabelDragging ? 1.8 : 1.25}
+            rx={3}
+            fill={ROLE_LABEL_FILL}
+            stroke={isLabelDragging ? ROLE_LABEL_ACTIVE_STROKE : ROLE_LABEL_STROKE}
+            strokeWidth={isLabelDragging ? 1.6 : 1}
           />
           <text
             x={edge.labelX}
             y={edge.labelY + 4}
             textAnchor="middle"
+            fontFamily="Georgia, Times New Roman, serif"
             fontSize={11}
-            fontWeight={700}
-            fill="#285147"
+            fontWeight={600}
+            fill={EDGE_STROKE}
           >
             {edge.label}
           </text>

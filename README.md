@@ -8,7 +8,7 @@ A browser-only React + TypeScript app that converts structured text into Chen an
 - Structured text parser for strong entities, weak entities, attributes, and relationships
 - Support for key, partial-key, composite, multivalued, and derived attributes
 - Support for regular and identifying relationships
-- Textbook-style relationship edges with single or double lines plus optional arrows
+- Textbook-style relationship edges with thin or thick lines plus optional arrows
 - Backward compatibility for legacy `1:N` and compact relationship-end syntax
 - Deterministic SVG auto-layout
 - Friendly parse error messages
@@ -133,17 +133,17 @@ The parser also accepts the same form written with `to`:
 
 These values drive the rendering automatically:
 
-- `min = 0` -> single line
-- `min = 1` -> double line
+- `min = 0` -> thin line
+- `min = 1` -> thick line
 - `max = 1` -> arrow toward the relationship diamond
 - `max = m` -> no arrow
 
 Examples:
 
-- `0..m` = single line + no arrow
-- `1..m` = double line + no arrow
-- `0..1` = single line + arrow
-- `1..1` = double line + arrow
+- `0..m` = thin line + no arrow
+- `1..m` = thick line + no arrow
+- `0..1` = thin line + arrow
+- `1..1` = thick line + arrow
 
 For ternary relationships, use named constraints:
 
@@ -208,8 +208,8 @@ Legacy mapping:
 - Key attribute = solid underline
 - Partial key attribute = dashed underline
 - Composite attribute = parent oval with child ovals
-- Partial participation = single line
-- Total participation = double line
+- Partial participation = thin line
+- Total participation = thick line
 - One-side / key constraint = arrow at that entity end
 - Many-side = no arrow at that entity end
 

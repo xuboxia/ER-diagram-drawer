@@ -14,12 +14,12 @@ const syntaxLines = [
 ];
 
 const notationLines = [
-  "min = 0 draws a single line; min = 1 draws a double line.",
+  "min = 0 draws a thin line; min = 1 draws a thick line.",
   "max = 1 draws an arrow toward the relationship diamond; max = m draws no arrow.",
-  "0..m = single line + no arrow.",
-  "1..m = double line + no arrow.",
-  "0..1 = single line + arrow.",
-  "1..1 = double line + arrow.",
+  "0..m = thin line + no arrow.",
+  "1..m = thick line + no arrow.",
+  "0..1 = thin line + arrow.",
+  "1..1 = thick line + arrow.",
   "Weak entity = double rectangle.",
   "Identifying relationship = double diamond.",
   "Multivalued attribute = double oval.",

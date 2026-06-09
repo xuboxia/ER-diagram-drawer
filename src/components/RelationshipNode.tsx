@@ -37,9 +37,9 @@ export function RelationshipNode({
           relationship.width,
           relationship.height,
         )}
-        fill="#d7ebe1"
-        stroke={isDragging ? "#205245" : "#2c4b43"}
-        strokeWidth={isDragging ? 3 : 2.5}
+        fill="#ffffff"
+        stroke={isDragging ? "#000000" : "#111111"}
+        strokeWidth={isDragging ? 2.8 : 1.8}
       />
       {relationship.kind === "identifying" ? (
         <polygon
@@ -50,17 +50,18 @@ export function RelationshipNode({
             relationship.height - 12,
           )}
           fill="none"
-          stroke={isDragging ? "#205245" : "#2c4b43"}
-          strokeWidth={2}
+          stroke={isDragging ? "#000000" : "#111111"}
+          strokeWidth={1.4}
         />
       ) : null}
       <text
         x={relationship.x}
         y={relationship.y + 5}
         textAnchor="middle"
-        fontSize={16}
+        fontFamily="Georgia, Times New Roman, serif"
+        fontSize={15}
         fontWeight={700}
-        fill="#17312a"
+        fill="#111111"
       >
         {relationship.name}
       </text>

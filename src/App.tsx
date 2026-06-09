@@ -365,7 +365,7 @@ function App() {
           <p className="panel__description">
             Strong entities render as rectangles, weak entities as double rectangles,
             identifying relationships as double diamonds, and relationship constraints
-            render on the edges using single or double lines plus arrows. Drag entities,
+            render on the edges using thin or thick lines plus arrows. Drag entities,
             relationships, attributes, and self-relationship role labels to refine the layout.
           </p>
 

@@ -22,10 +22,10 @@ export function EntityNode({ entity, isDragging = false, onPointerDown }: Entity
         y={y}
         width={entity.width}
         height={entity.height}
-        rx={18}
-        fill="#fefcf5"
-        stroke={isDragging ? "#205245" : "#2c4b43"}
-        strokeWidth={isDragging ? 3 : 2.5}
+        rx={3}
+        fill="#ffffff"
+        stroke={isDragging ? "#000000" : "#111111"}
+        strokeWidth={isDragging ? 2.6 : 1.8}
       />
       {entity.kind === "weak" ? (
         <rect
@@ -33,19 +33,20 @@ export function EntityNode({ entity, isDragging = false, onPointerDown }: Entity
           y={y + 8}
           width={entity.width - 16}
           height={entity.height - 16}
-          rx={14}
+          rx={2}
           fill="none"
-          stroke={isDragging ? "#205245" : "#2c4b43"}
-          strokeWidth={2}
+          stroke={isDragging ? "#000000" : "#111111"}
+          strokeWidth={1.4}
         />
       ) : null}
       <text
         x={entity.x}
         y={entity.y + 6}
         textAnchor="middle"
-        fontSize={20}
+        fontFamily="Georgia, Times New Roman, serif"
+        fontSize={19}
         fontWeight={700}
-        fill="#17312a"
+        fill="#111111"
       >
         {entity.name}
       </text>

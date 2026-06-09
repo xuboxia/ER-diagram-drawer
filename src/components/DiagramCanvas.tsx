@@ -194,26 +194,21 @@ export function DiagramCanvas({
           style={{ minWidth: Math.max(layout.width * zoom, 1120), touchAction: "none" }}
         >
           <defs>
-            <pattern id="dot-grid" width="28" height="28" patternUnits="userSpaceOnUse">
-              <circle cx="1.5" cy="1.5" r="1.5" fill="#d6e4dc" />
-            </pattern>
-            <filter id="page-shadow" x="-10%" y="-10%" width="120%" height="120%">
-              <feDropShadow dx="0" dy="16" stdDeviation="18" floodColor="#a9bbb2" floodOpacity="0.18" />
-            </filter>
+            <style>
+              {`text { paint-order: stroke; }`}
+            </style>
           </defs>
 
-          <rect width={layout.width} height={layout.height} fill="#f3f7f4" />
-          <rect width={layout.width} height={layout.height} fill="url(#dot-grid)" opacity="0.8" />
+          <rect width={layout.width} height={layout.height} fill="#f7f7f7" />
           <rect
             x={24}
             y={24}
             width={Math.max(0, layout.width - 48)}
             height={Math.max(0, layout.height - 48)}
-            rx={30}
-            fill="#fffdf8"
-            stroke="#d7e4de"
-            strokeWidth={1.5}
-            filter="url(#page-shadow)"
+            rx={4}
+            fill="#ffffff"
+            stroke="#cccccc"
+            strokeWidth={1}
           />
 
           {layout.edges.map((edge) => (

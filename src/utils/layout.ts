@@ -93,7 +93,7 @@ const MANUAL_RELATIONSHIP_MIDPOINT_PULL = 0.82;
 const TERNARY_ENTRY_MIN_SEPARATION = 0.82;
 const TERNARY_ENTRY_GUIDE_OFFSET = 42;
 
-const RELATIONSHIP_DOUBLE_LINE_OFFSET = 4;
+const RELATIONSHIP_TOTAL_LINE_PADDING = 6;
 const RELATIONSHIP_ARROW_LENGTH = 18;
 const RELATIONSHIP_ARROW_WIDTH = 14;
 
@@ -2841,10 +2841,10 @@ function getEdgeBounds(edge: LayoutEdge): LayoutRect {
   let maxY = Math.max(...yValues);
 
   if (edge.kind === "entity-relationship" && edge.endConstraint?.min === 1) {
-    minX -= RELATIONSHIP_DOUBLE_LINE_OFFSET;
-    maxX += RELATIONSHIP_DOUBLE_LINE_OFFSET;
-    minY -= RELATIONSHIP_DOUBLE_LINE_OFFSET;
-    maxY += RELATIONSHIP_DOUBLE_LINE_OFFSET;
+    minX -= RELATIONSHIP_TOTAL_LINE_PADDING;
+    maxX += RELATIONSHIP_TOTAL_LINE_PADDING;
+    minY -= RELATIONSHIP_TOTAL_LINE_PADDING;
+    maxY += RELATIONSHIP_TOTAL_LINE_PADDING;
   }
 
   if (edge.kind === "entity-relationship" && edge.endConstraint?.max === "1") {

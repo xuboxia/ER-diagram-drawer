@@ -16,13 +16,6 @@ export function AttributeNode({
   isDragging = false,
   onPointerDown,
 }: AttributeNodeProps) {
-  const fill = attribute.isComposite
-    ? "#edf5f0"
-    : attribute.isPartialKey
-      ? "#fff1db"
-      : attribute.isKey
-        ? "#fff5d8"
-        : "#ffffff";
   const strokeDasharray = attribute.isDerived ? "7 5" : undefined;
   const underlineWidth = getUnderlineWidth(attribute);
   const underlineY = attribute.y + 11;
@@ -40,8 +33,8 @@ export function AttributeNode({
           rx={attribute.rx + 6}
           ry={attribute.ry + 4}
           fill="none"
-          stroke={isDragging ? "#24584a" : "#3f6359"}
-          strokeWidth={2}
+          stroke={isDragging ? "#000000" : "#111111"}
+          strokeWidth={1.5}
           strokeDasharray={strokeDasharray}
         />
       ) : null}
@@ -51,9 +44,9 @@ export function AttributeNode({
         cy={attribute.y}
         rx={attribute.rx}
         ry={attribute.ry}
-        fill={fill}
-        stroke={isDragging ? "#24584a" : "#3f6359"}
-        strokeWidth={isDragging ? 2.4 : 2}
+        fill="#ffffff"
+        stroke={isDragging ? "#000000" : "#111111"}
+        strokeWidth={isDragging ? 2.2 : 1.5}
         strokeDasharray={strokeDasharray}
       />
 
@@ -61,9 +54,10 @@ export function AttributeNode({
         x={attribute.x}
         y={attribute.y + 4}
         textAnchor="middle"
-        fontSize={14}
+        fontFamily="Georgia, Times New Roman, serif"
+        fontSize={13}
         fontWeight={attribute.isKey || attribute.isPartialKey ? 700 : 600}
-        fill="#17312a"
+        fill="#111111"
       >
         {attribute.name}
       </text>
@@ -74,8 +68,8 @@ export function AttributeNode({
           y1={underlineY}
           x2={attribute.x + underlineWidth / 2}
           y2={underlineY}
-          stroke="#17312a"
-          strokeWidth={1.8}
+          stroke="#111111"
+          strokeWidth={1.4}
           strokeDasharray={attribute.isPartialKey ? "4 3" : undefined}
           strokeLinecap="round"
         />
