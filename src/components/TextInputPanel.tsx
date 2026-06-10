@@ -55,7 +55,7 @@ export function TextInputPanel({ value, onChange }: TextInputPanelProps) {
     <section className="panel">
       <div className="panel__header">
         <div>
-          <p className="eyebrow">Structured Input</p>
+          <p className="eyebrow">Plain Text</p>
           <h2>Diagram Source</h2>
         </div>
         <span className="panel__badge">Plain text</span>

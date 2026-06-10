@@ -1,13 +1,23 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { DiagramCanvas } from "./components/DiagramCanvas";
+import { StructuredBuilder } from "./components/StructuredBuilder";
 import { TaskSidebar } from "./components/TaskSidebar";
 import { TextInputPanel } from "./components/TextInputPanel";
 import { Toolbar } from "./components/Toolbar";
 import { EXAMPLE_INPUT } from "./data/exampleInput";
+import { getDefaultStructuredModel } from "./data/structuredPresets";
 import type { DiagramLayout, DiagramModel, LayoutPoint, ParseIssue } from "./types/diagram";
+import type { InputMode, StructuredDiagramModel } from "./types/structured";
 import { exportPng, exportSvg } from "./utils/export";
 import { createDiagramLayout, recomputeLayoutEdges } from "./utils/layout";
 import { parseDiagram } from "./utils/parser";
+import {
+  createEmptyStructuredModel,
+  normalizeInputMode,
+  normalizeStructuredModel,
+  structuredModelToSource,
+  validateStructuredModel,
+} from "./utils/structuredModel";
 
 const LEGACY_DRAFT_STORAGE_KEY = "chen-diagram-generator:draft:v1";
 const TASK_STORAGE_KEY = "chen-diagram-generator:tasks:v2";
@@ -25,7 +35,9 @@ type SelfRelationshipLabelOverrides = Record<string, LayoutPoint>;
 interface SavedTask {
   id: string;
   title: string;
+  inputMode: InputMode;
   inputValue: string;
+  structuredModel: StructuredDiagramModel;
   zoom: number;
   layout: DiagramLayout | null;
   selfRelationshipLabelOverrides: SelfRelationshipLabelOverrides;
@@ -152,13 +164,25 @@ function normalizeLabelOverrides(value: unknown): SelfRelationshipLabelOverrides
   }, {});
 }
 
-function createSavedTask(source = EXAMPLE_INPUT, index = 1): SavedTask {
+function getTaskSource(task: Pick<SavedTask, "inputMode" | "inputValue" | "structuredModel">): string {
+  return task.inputMode === "structured" ? structuredModelToSource(task.structuredModel) : task.inputValue;
+}
+
+function createSavedTask(
+  source: string | null = null,
+  index = 1,
+  inputMode: InputMode = "structured",
+  structuredModel: StructuredDiagramModel = getDefaultStructuredModel(),
+): SavedTask {
   const timestamp = new Date().toISOString();
+  const taskSource = source ?? structuredModelToSource(structuredModel);
 
   return {
     id: createTaskId(),
-    title: getTaskTitle(source, `Diagram ${index}`),
-    inputValue: source,
+    title: getTaskTitle(taskSource, `Diagram ${index}`),
+    inputMode,
+    inputValue: taskSource,
+    structuredModel,
     zoom: 1,
     layout: null,
     selfRelationshipLabelOverrides: {},
@@ -173,15 +197,22 @@ function normalizeSavedTask(value: unknown, index: number): SavedTask | null {
   }
 
   const now = new Date().toISOString();
+  const isLegacyPlainTextTask = value.inputMode === undefined;
+  const inputMode = isLegacyPlainTextTask ? "plain-text" : normalizeInputMode(value.inputMode);
+  const structuredModel = normalizeStructuredModel(value.structuredModel) ?? getDefaultStructuredModel();
+  const taskSource =
+    inputMode === "structured" ? structuredModelToSource(structuredModel) : value.inputValue;
   const title =
     typeof value.title === "string" && value.title.trim()
       ? value.title.trim()
-      : getTaskTitle(value.inputValue, `Diagram ${index + 1}`);
+      : getTaskTitle(taskSource, `Diagram ${index + 1}`);
 
   return {
     id: typeof value.id === "string" && value.id ? value.id : createTaskId(),
     title,
+    inputMode,
     inputValue: value.inputValue,
+    structuredModel,
     zoom: typeof value.zoom === "number" ? value.zoom : 1,
     layout: normalizeLayout(value.layout),
     selfRelationshipLabelOverrides: normalizeLabelOverrides(value.selfRelationshipLabelOverrides),
@@ -199,7 +230,12 @@ function createInitialTaskStore(): SavedTaskStore {
   const legacyDraft = readSavedDraft();
 
   if (legacyDraft) {
-    const migratedTask = createSavedTask(legacyDraft.inputValue);
+    const migratedTask = createSavedTask(
+      legacyDraft.inputValue,
+      1,
+      "plain-text",
+      getDefaultStructuredModel(),
+    );
 
     return {
       activeTaskId: migratedTask.id,
@@ -213,7 +249,13 @@ function createInitialTaskStore(): SavedTaskStore {
     };
   }
 
-  const initialTask = createSavedTask(EXAMPLE_INPUT);
+  const defaultStructuredModel = getDefaultStructuredModel();
+  const initialTask = createSavedTask(
+    structuredModelToSource(defaultStructuredModel),
+    1,
+    "structured",
+    defaultStructuredModel,
+  );
 
   return {
     activeTaskId: initialTask.id,
@@ -269,14 +311,19 @@ function getActiveTask(store: SavedTaskStore): SavedTask {
 function snapshotTask(
   task: SavedTask,
   inputValue: string,
+  inputMode: InputMode,
+  structuredModel: StructuredDiagramModel,
   zoom: number,
   layout: DiagramLayout | null,
   labelOverrides: SelfRelationshipLabelOverrides,
+  activeSource: string,
 ): SavedTask {
   return {
     ...task,
-    title: getTaskTitle(inputValue, task.title),
+    title: getTaskTitle(activeSource, task.title),
+    inputMode,
     inputValue,
+    structuredModel,
     zoom,
     layout,
     selfRelationshipLabelOverrides: labelOverrides,
@@ -325,7 +372,11 @@ function App() {
   const initialActiveTask = getActiveTask(initialTaskStore);
   const [tasks, setTasks] = useState<SavedTask[]>(initialTaskStore.tasks);
   const [activeTaskId, setActiveTaskId] = useState(initialTaskStore.activeTaskId);
+  const [inputMode, setInputMode] = useState<InputMode>(initialActiveTask.inputMode);
   const [inputValue, setInputValue] = useState(initialActiveTask.inputValue);
+  const [structuredModel, setStructuredModel] = useState<StructuredDiagramModel>(
+    initialActiveTask.structuredModel,
+  );
   const [diagramModel, setDiagramModel] = useState<DiagramModel | null>(null);
   const [layout, setLayout] = useState<DiagramLayout | null>(initialActiveTask.layout);
   const [errors, setErrors] = useState<ParseIssue[]>([]);
@@ -335,14 +386,17 @@ function App() {
     `Task "${initialActiveTask.title}" loaded from local storage. Progress is saved in this browser.`,
   );
   const [zoom, setZoom] = useState(initialActiveTask.zoom);
-  const deferredInput = useDeferredValue(inputValue);
+  const structuredSource = structuredModelToSource(structuredModel);
+  const activeSource = inputMode === "structured" ? structuredSource : inputValue;
+  const deferredSource = useDeferredValue(activeSource);
+  const structuredValidationIssues = validateStructuredModel(structuredModel);
   const svgRef = useRef<SVGSVGElement>(null);
   const layoutRequestIdRef = useRef(0);
   const hydratedLayoutRef = useRef<HydratedLayoutMarker | null>(
     initialActiveTask.layout
       ? {
           taskId: initialActiveTask.id,
-          source: initialActiveTask.inputValue,
+          source: getTaskSource(initialActiveTask),
         }
       : null,
   );
@@ -416,15 +470,24 @@ function App() {
   };
 
   useEffect(() => {
-    void applyParseResult(deferredInput, "auto");
+    void applyParseResult(deferredSource, "auto");
     // Using the deferred text keeps typing responsive without adding a debounce dependency.
-  }, [deferredInput]);
+  }, [deferredSource]);
 
   useEffect(() => {
     setTasks((currentTasks) => {
       const nextTasks = currentTasks.map((task) =>
         task.id === activeTaskId
-          ? snapshotTask(task, inputValue, zoom, layout, selfRelationshipLabelOverrides)
+          ? snapshotTask(
+              task,
+              inputValue,
+              inputMode,
+              structuredModel,
+              zoom,
+              layout,
+              selfRelationshipLabelOverrides,
+              activeSource,
+            )
           : task,
       );
 
@@ -435,7 +498,16 @@ function App() {
 
       return nextTasks;
     });
-  }, [activeTaskId, inputValue, zoom, layout, selfRelationshipLabelOverrides]);
+  }, [
+    activeTaskId,
+    activeSource,
+    inputMode,
+    inputValue,
+    layout,
+    selfRelationshipLabelOverrides,
+    structuredModel,
+    zoom,
+  ]);
 
   const displayedLayout = layout
     ? (() => {
@@ -470,16 +542,32 @@ function App() {
   const createCurrentTaskSnapshot = () =>
     tasks.map((task) =>
       task.id === activeTaskId
-        ? snapshotTask(task, inputValue, zoom, layout, selfRelationshipLabelOverrides)
+        ? snapshotTask(
+            task,
+            inputValue,
+            inputMode,
+            structuredModel,
+            zoom,
+            layout,
+            selfRelationshipLabelOverrides,
+            activeSource,
+          )
         : task,
     );
 
   const handleGenerate = () => {
-    void applyParseResult(inputValue, "manual");
+    void applyParseResult(activeSource, "manual");
   };
 
   const handleLoadExample = () => {
-    setInputValue(EXAMPLE_INPUT);
+    if (inputMode === "structured") {
+      const defaultModel = getDefaultStructuredModel();
+      setStructuredModel(defaultModel);
+      setInputValue(structuredModelToSource(defaultModel));
+    } else {
+      setInputValue(EXAMPLE_INPUT);
+    }
+
     setLayout(null);
     setDiagramModel(null);
     setErrors([]);
@@ -493,7 +581,16 @@ function App() {
     const nextTasks = createCurrentTaskSnapshot().map((task) =>
       task.id === activeTaskId
         ? {
-            ...snapshotTask(task, inputValue, zoom, layout, selfRelationshipLabelOverrides),
+            ...snapshotTask(
+              task,
+              inputValue,
+              inputMode,
+              structuredModel,
+              zoom,
+              layout,
+              selfRelationshipLabelOverrides,
+              activeSource,
+            ),
             updatedAt: timestamp,
           }
         : task,
@@ -509,6 +606,7 @@ function App() {
 
   const handleClearDraft = () => {
     setInputValue("");
+    setStructuredModel(createEmptyStructuredModel());
     setDiagramModel(null);
     setLayout(null);
     setErrors([]);
@@ -519,12 +617,20 @@ function App() {
   };
 
   const handleCreateTask = () => {
-    const nextTask = createSavedTask("", tasks.length + 1);
+    const defaultModel = getDefaultStructuredModel();
+    const nextTask = createSavedTask(
+      structuredModelToSource(defaultModel),
+      tasks.length + 1,
+      "structured",
+      defaultModel,
+    );
     const nextTasks = [nextTask, ...createCurrentTaskSnapshot()].slice(0, MAX_SAVED_TASKS);
 
     setTasks(nextTasks);
     setActiveTaskId(nextTask.id);
+    setInputMode(nextTask.inputMode);
     setInputValue(nextTask.inputValue);
+    setStructuredModel(nextTask.structuredModel);
     setDiagramModel(null);
     setLayout(null);
     setErrors([]);
@@ -548,6 +654,8 @@ function App() {
 
     setActiveTaskId(nextTask.id);
     setInputValue(nextTask.inputValue);
+    setInputMode(nextTask.inputMode);
+    setStructuredModel(nextTask.structuredModel);
     setDiagramModel(null);
     setLayout(nextTask.layout);
     setErrors([]);
@@ -556,7 +664,7 @@ function App() {
     hydratedLayoutRef.current = nextTask.layout
       ? {
           taskId: nextTask.id,
-          source: nextTask.inputValue,
+          source: getTaskSource(nextTask),
         }
       : null;
     saveTaskStore({
@@ -587,7 +695,9 @@ function App() {
 
     if (taskId === activeTaskId) {
       setActiveTaskId(nextActiveTask.id);
+      setInputMode(nextActiveTask.inputMode);
       setInputValue(nextActiveTask.inputValue);
+      setStructuredModel(nextActiveTask.structuredModel);
       setDiagramModel(null);
       setLayout(nextActiveTask.layout);
       setErrors([]);
@@ -596,7 +706,7 @@ function App() {
       hydratedLayoutRef.current = nextActiveTask.layout
         ? {
             taskId: nextActiveTask.id,
-            source: nextActiveTask.inputValue,
+            source: getTaskSource(nextActiveTask),
           }
         : null;
     }
@@ -606,6 +716,37 @@ function App() {
       tasks: nextTasks,
     });
     setNotice("Local task deleted.");
+  };
+
+  const handleInputModeChange = (nextMode: InputMode) => {
+    if (nextMode === inputMode) {
+      return;
+    }
+
+    if (nextMode === "plain-text") {
+      setInputValue(structuredSource);
+    }
+
+    setInputMode(nextMode);
+    setDiagramModel(null);
+    setLayout(null);
+    setErrors([]);
+    setSelfRelationshipLabelOverrides({});
+    hydratedLayoutRef.current = null;
+    setNotice(
+      nextMode === "structured"
+        ? "Structured Builder enabled. The form now generates the source for preview."
+        : "Plain Text enabled. You can edit the generated source manually.",
+    );
+  };
+
+  const handleStructuredModelChange = (nextStructuredModel: StructuredDiagramModel) => {
+    setStructuredModel(nextStructuredModel);
+    setLayout(null);
+    setDiagramModel(null);
+    setErrors([]);
+    setSelfRelationshipLabelOverrides({});
+    hydratedLayoutRef.current = null;
   };
 
   const handleExportPng = async () => {
@@ -745,14 +886,59 @@ function App() {
 
       <main className="workspace">
         <TaskSidebar
-          tasks={tasks}
+          tasks={tasks.map((task) => ({
+            ...task,
+            inputValue: getTaskSource(task),
+          }))}
           activeTaskId={activeTaskId}
           onCreateTask={handleCreateTask}
           onSelectTask={handleSelectTask}
           onDeleteTask={handleDeleteTask}
         />
 
-        <TextInputPanel value={inputValue} onChange={setInputValue} />
+        <div className="input-stack">
+          <section className="mode-switch-card">
+            <div>
+              <p className="eyebrow">Input Mode</p>
+              <h2>{inputMode === "structured" ? "Structured Builder" : "Plain Text"}</h2>
+              <p>
+                Use forms for explicit modelling choices, or switch to source syntax when
+                you want full manual control.
+              </p>
+            </div>
+            <div className="mode-switch">
+              <button
+                className={`mode-switch__button${
+                  inputMode === "structured" ? " mode-switch__button--active" : ""
+                }`}
+                type="button"
+                onClick={() => handleInputModeChange("structured")}
+              >
+                Structured Builder
+              </button>
+              <button
+                className={`mode-switch__button${
+                  inputMode === "plain-text" ? " mode-switch__button--active" : ""
+                }`}
+                type="button"
+                onClick={() => handleInputModeChange("plain-text")}
+              >
+                Plain Text
+              </button>
+            </div>
+          </section>
+
+          {inputMode === "structured" ? (
+            <StructuredBuilder
+              generatedSource={structuredSource}
+              model={structuredModel}
+              validationIssues={structuredValidationIssues}
+              onChange={handleStructuredModelChange}
+            />
+          ) : (
+            <TextInputPanel value={inputValue} onChange={setInputValue} />
+          )}
+        </div>
 
         <section className="panel panel--preview">
           <div className="panel__header">
