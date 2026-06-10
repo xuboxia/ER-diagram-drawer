@@ -179,8 +179,158 @@ input {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(320px, 0.95fr) minmax(420px, 1.2fr);
+  grid-template-columns: minmax(240px, 280px) minmax(340px, 430px) minmax(520px, 1fr);
   gap: 20px;
+  align-items: start;
+}
+
+.task-sidebar {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  max-height: calc(100vh - 48px);
+  min-height: 720px;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid rgba(43, 78, 67, 0.12);
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(243, 248, 245, 0.88)),
+    #ffffff;
+  box-shadow: 0 22px 60px rgba(30, 58, 49, 0.08);
+  backdrop-filter: blur(14px);
+}
+
+.task-sidebar__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.task-sidebar h2 {
+  margin: 0;
+  font-size: 1.35rem;
+  letter-spacing: -0.04em;
+}
+
+.task-sidebar__new {
+  border: none;
+  border-radius: 999px;
+  padding: 9px 12px;
+  background: #244c42;
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    background 140ms ease;
+}
+
+.task-sidebar__new:hover {
+  transform: translateY(-1px);
+  background: #2f6d5c;
+}
+
+.task-sidebar__note {
+  margin: 0;
+  color: #5a7168;
+  font-size: 0.88rem;
+}
+
+.task-list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.task-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 18px;
+  background: rgba(244, 248, 245, 0.88);
+  transition:
+    border 140ms ease,
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.task-item:hover {
+  transform: translateY(-1px);
+  background: #edf5f0;
+}
+
+.task-item--active {
+  border-color: rgba(36, 76, 66, 0.22);
+  background: #deece4;
+  box-shadow: inset 3px 0 0 #244c42;
+}
+
+.task-item__main,
+.task-item__delete {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.task-item__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 4px 12px 14px;
+  text-align: left;
+}
+
+.task-item__title,
+.task-item__preview,
+.task-item__time {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-item__title {
+  color: #17312a;
+  font-size: 0.92rem;
+  font-weight: 800;
+}
+
+.task-item__preview {
+  color: #557168;
+  font-size: 0.78rem;
+}
+
+.task-item__time {
+  color: #70887f;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.task-item__delete {
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: #6f8179;
+  font-size: 1.15rem;
+  line-height: 1;
+}
+
+.task-item__delete:hover {
+  background: rgba(36, 76, 66, 0.1);
+  color: #244c42;
 }
 
 .panel {
@@ -257,6 +407,81 @@ input {
   margin-top: 8px;
 }
 
+.syntax-guide {
+  display: grid;
+  gap: 12px;
+}
+
+.syntax-step {
+  padding: 14px;
+  border: 1px solid #ddeae3;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.syntax-step h4 {
+  margin: 0 0 6px;
+  color: #17312a;
+  font-size: 0.95rem;
+}
+
+.syntax-step p,
+.helper-footnote {
+  margin: 0;
+  color: #526d63;
+  font-size: 0.88rem;
+}
+
+.syntax-example {
+  margin: 10px 0 0;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #d5e5dd;
+  border-radius: 14px;
+  background: #fbfdfb;
+  color: #17312a;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.notation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.notation-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px;
+  border: 1px solid #dbe9e2;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.64);
+}
+
+.notation-card strong {
+  color: #17312a;
+  font-size: 0.98rem;
+}
+
+.notation-card span {
+  color: #405d53;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.notation-card small {
+  color: #667d75;
+  font-size: 0.76rem;
+}
+
+.helper-footnote {
+  margin-top: 12px;
+}
+
 .error-list {
   padding: 18px;
   background: #fff5ef;
@@ -325,6 +550,16 @@ input {
     min-width: 0;
   }
 
+  .task-sidebar {
+    position: static;
+    max-height: none;
+    min-height: auto;
+  }
+
+  .task-list {
+    max-height: 280px;
+  }
+
   .panel {
     min-height: 640px;
   }
@@ -350,5 +585,8 @@ input {
   .editor {
     min-height: 380px;
   }
-}
 
+  .notation-grid {
+    grid-template-columns: 1fr;
+  }
+}

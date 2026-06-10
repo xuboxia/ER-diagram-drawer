@@ -1,5 +1,6 @@
 import { startTransition, useDeferredValue, useEffect, useRef, useState } from "react";
 import { DiagramCanvas } from "./components/DiagramCanvas";
+import { TaskSidebar } from "./components/TaskSidebar";
 import { TextInputPanel } from "./components/TextInputPanel";
 import { Toolbar } from "./components/Toolbar";
 import { EXAMPLE_INPUT } from "./data/exampleInput";
@@ -8,7 +9,9 @@ import { exportPng, exportSvg } from "./utils/export";
 import { createDiagramLayout, recomputeLayoutEdges } from "./utils/layout";
 import { parseDiagram } from "./utils/parser";
 
-const DRAFT_STORAGE_KEY = "chen-diagram-generator:draft:v1";
+const LEGACY_DRAFT_STORAGE_KEY = "chen-diagram-generator:draft:v1";
+const TASK_STORAGE_KEY = "chen-diagram-generator:tasks:v2";
+const MAX_SAVED_TASKS = 28;
 
 interface SavedDraft {
   inputValue: string;
@@ -19,13 +22,77 @@ interface SavedDraft {
 type DraggableNodeKind = "entity" | "relationship" | "attribute";
 type SelfRelationshipLabelOverrides = Record<string, LayoutPoint>;
 
-function readSavedDraft(): SavedDraft | null {
-  if (typeof window === "undefined") {
+interface SavedTask {
+  id: string;
+  title: string;
+  inputValue: string;
+  zoom: number;
+  layout: DiagramLayout | null;
+  selfRelationshipLabelOverrides: SelfRelationshipLabelOverrides;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface SavedTaskStore {
+  activeTaskId: string;
+  tasks: SavedTask[];
+}
+
+interface HydratedLayoutMarker {
+  taskId: string;
+  source: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function getBrowserStorage(): Storage | null {
+  if (typeof window === "undefined" || !("localStorage" in window)) {
     return null;
   }
 
   try {
-    const rawDraft = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function createTaskId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+
+  return `task-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getTaskTitle(source: string, fallback = "Untitled diagram"): string {
+  const blockMatch = source.match(
+    /^\s*(?:WeakEntity|Entity|IdentifyingRelationship|Relationship):\s*(.+?)\s*$/im,
+  );
+
+  if (blockMatch?.[1]?.trim()) {
+    return `${blockMatch[1].trim().slice(0, 42)} diagram`;
+  }
+
+  const firstUsefulLine = source
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0 && !line.startsWith("-"));
+
+  return firstUsefulLine ? firstUsefulLine.slice(0, 48) : fallback;
+}
+
+function readSavedDraft(): SavedDraft | null {
+  const storage = getBrowserStorage();
+
+  if (!storage) {
+    return null;
+  }
+
+  try {
+    const rawDraft = storage.getItem(LEGACY_DRAFT_STORAGE_KEY);
 
     if (!rawDraft) {
       return null;
@@ -47,6 +114,191 @@ function readSavedDraft(): SavedDraft | null {
   }
 }
 
+function normalizeLayout(value: unknown): DiagramLayout | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  if (
+    typeof value.width !== "number" ||
+    typeof value.height !== "number" ||
+    !Array.isArray(value.entities) ||
+    !Array.isArray(value.relationships) ||
+    !Array.isArray(value.attributes) ||
+    !Array.isArray(value.edges)
+  ) {
+    return null;
+  }
+
+  return value as unknown as DiagramLayout;
+}
+
+function normalizeLabelOverrides(value: unknown): SelfRelationshipLabelOverrides {
+  if (!isRecord(value)) {
+    return {};
+  }
+
+  return Object.entries(value).reduce<SelfRelationshipLabelOverrides>((overrides, [key, point]) => {
+    if (!isRecord(point) || typeof point.x !== "number" || typeof point.y !== "number") {
+      return overrides;
+    }
+
+    overrides[key] = {
+      x: point.x,
+      y: point.y,
+    };
+
+    return overrides;
+  }, {});
+}
+
+function createSavedTask(source = EXAMPLE_INPUT, index = 1): SavedTask {
+  const timestamp = new Date().toISOString();
+
+  return {
+    id: createTaskId(),
+    title: getTaskTitle(source, `Diagram ${index}`),
+    inputValue: source,
+    zoom: 1,
+    layout: null,
+    selfRelationshipLabelOverrides: {},
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function normalizeSavedTask(value: unknown, index: number): SavedTask | null {
+  if (!isRecord(value) || typeof value.inputValue !== "string") {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  const title =
+    typeof value.title === "string" && value.title.trim()
+      ? value.title.trim()
+      : getTaskTitle(value.inputValue, `Diagram ${index + 1}`);
+
+  return {
+    id: typeof value.id === "string" && value.id ? value.id : createTaskId(),
+    title,
+    inputValue: value.inputValue,
+    zoom: typeof value.zoom === "number" ? value.zoom : 1,
+    layout: normalizeLayout(value.layout),
+    selfRelationshipLabelOverrides: normalizeLabelOverrides(value.selfRelationshipLabelOverrides),
+    createdAt: typeof value.createdAt === "string" ? value.createdAt : now,
+    updatedAt:
+      typeof value.updatedAt === "string"
+        ? value.updatedAt
+        : typeof value.savedAt === "string"
+          ? value.savedAt
+          : now,
+  };
+}
+
+function createInitialTaskStore(): SavedTaskStore {
+  const legacyDraft = readSavedDraft();
+
+  if (legacyDraft) {
+    const migratedTask = createSavedTask(legacyDraft.inputValue);
+
+    return {
+      activeTaskId: migratedTask.id,
+      tasks: [
+        {
+          ...migratedTask,
+          zoom: legacyDraft.zoom,
+          updatedAt: legacyDraft.savedAt,
+        },
+      ],
+    };
+  }
+
+  const initialTask = createSavedTask(EXAMPLE_INPUT);
+
+  return {
+    activeTaskId: initialTask.id,
+    tasks: [initialTask],
+  };
+}
+
+function readSavedTaskStore(): SavedTaskStore {
+  const storage = getBrowserStorage();
+
+  if (!storage) {
+    return createInitialTaskStore();
+  }
+
+  try {
+    const rawStore = storage.getItem(TASK_STORAGE_KEY);
+
+    if (!rawStore) {
+      return createInitialTaskStore();
+    }
+
+    const parsedStore = JSON.parse(rawStore) as Partial<SavedTaskStore>;
+    const tasks = Array.isArray(parsedStore.tasks)
+      ? parsedStore.tasks
+          .map((task, index) => normalizeSavedTask(task, index))
+          .filter((task): task is SavedTask => task !== null)
+          .slice(0, MAX_SAVED_TASKS)
+      : [];
+
+    if (tasks.length === 0) {
+      return createInitialTaskStore();
+    }
+
+    const activeTaskId =
+      typeof parsedStore.activeTaskId === "string" &&
+      tasks.some((task) => task.id === parsedStore.activeTaskId)
+        ? parsedStore.activeTaskId
+        : tasks[0].id;
+
+    return {
+      activeTaskId,
+      tasks,
+    };
+  } catch {
+    return createInitialTaskStore();
+  }
+}
+
+function getActiveTask(store: SavedTaskStore): SavedTask {
+  return store.tasks.find((task) => task.id === store.activeTaskId) ?? store.tasks[0];
+}
+
+function snapshotTask(
+  task: SavedTask,
+  inputValue: string,
+  zoom: number,
+  layout: DiagramLayout | null,
+  labelOverrides: SelfRelationshipLabelOverrides,
+): SavedTask {
+  return {
+    ...task,
+    title: getTaskTitle(inputValue, task.title),
+    inputValue,
+    zoom,
+    layout,
+    selfRelationshipLabelOverrides: labelOverrides,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function saveTaskStore(store: SavedTaskStore): boolean {
+  const storage = getBrowserStorage();
+
+  if (!storage) {
+    return false;
+  }
+
+  try {
+    storage.setItem(TASK_STORAGE_KEY, JSON.stringify(store));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function formatSavedAt(savedAt: string): string {
   const date = new Date(savedAt);
 
@@ -62,48 +314,67 @@ function formatSavedAt(savedAt: string): string {
   }).format(date);
 }
 
-function saveDraftToStorage(inputValue: string, zoom: number): SavedDraft | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  try {
-    const draft: SavedDraft = {
-      inputValue,
-      zoom,
-      savedAt: new Date().toISOString(),
-    };
-
-    window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
-    return draft;
-  } catch {
-    return null;
-  }
-}
-
 function App() {
-  const restoredDraft = readSavedDraft();
-  const [inputValue, setInputValue] = useState(restoredDraft?.inputValue ?? EXAMPLE_INPUT);
+  const initialTaskStoreRef = useRef<SavedTaskStore | null>(null);
+
+  if (initialTaskStoreRef.current === null) {
+    initialTaskStoreRef.current = readSavedTaskStore();
+  }
+
+  const initialTaskStore = initialTaskStoreRef.current;
+  const initialActiveTask = getActiveTask(initialTaskStore);
+  const [tasks, setTasks] = useState<SavedTask[]>(initialTaskStore.tasks);
+  const [activeTaskId, setActiveTaskId] = useState(initialTaskStore.activeTaskId);
+  const [inputValue, setInputValue] = useState(initialActiveTask.inputValue);
   const [diagramModel, setDiagramModel] = useState<DiagramModel | null>(null);
-  const [layout, setLayout] = useState<DiagramLayout | null>(null);
+  const [layout, setLayout] = useState<DiagramLayout | null>(initialActiveTask.layout);
   const [errors, setErrors] = useState<ParseIssue[]>([]);
   const [selfRelationshipLabelOverrides, setSelfRelationshipLabelOverrides] =
-    useState<SelfRelationshipLabelOverrides>({});
+    useState<SelfRelationshipLabelOverrides>(initialActiveTask.selfRelationshipLabelOverrides);
   const [notice, setNotice] = useState(
-    restoredDraft
-      ? `Restored saved draft from ${formatSavedAt(restoredDraft.savedAt)}.`
-      : "Example loaded. Edit the source to regenerate the diagram.",
+    `Task "${initialActiveTask.title}" loaded from local storage. Progress is saved in this browser.`,
   );
-  const [zoom, setZoom] = useState(restoredDraft?.zoom ?? 1);
+  const [zoom, setZoom] = useState(initialActiveTask.zoom);
   const deferredInput = useDeferredValue(inputValue);
   const svgRef = useRef<SVGSVGElement>(null);
   const layoutRequestIdRef = useRef(0);
+  const hydratedLayoutRef = useRef<HydratedLayoutMarker | null>(
+    initialActiveTask.layout
+      ? {
+          taskId: initialActiveTask.id,
+          source: initialActiveTask.inputValue,
+        }
+      : null,
+  );
 
   const applyParseResult = async (source: string, mode: "auto" | "manual") => {
     const requestId = ++layoutRequestIdRef.current;
     const result = parseDiagram(source);
 
     if (result.model) {
+      const hydratedLayout = hydratedLayoutRef.current;
+      const shouldKeepHydratedLayout =
+        mode === "auto" &&
+        hydratedLayout !== null &&
+        hydratedLayout.taskId === activeTaskId &&
+        hydratedLayout.source === source &&
+        layout !== null;
+
+      if (shouldKeepHydratedLayout) {
+        hydratedLayoutRef.current = null;
+
+        startTransition(() => {
+          setDiagramModel(result.model);
+          setErrors([]);
+        });
+
+        setNotice(
+          `Restored "${getTaskTitle(source)}" with its saved node positions and label adjustments.`,
+        );
+        return;
+      }
+
+      hydratedLayoutRef.current = null;
       setNotice(mode === "manual" ? "Generating diagram..." : "Refreshing live preview...");
 
       try {
@@ -150,8 +421,21 @@ function App() {
   }, [deferredInput]);
 
   useEffect(() => {
-    saveDraftToStorage(inputValue, zoom);
-  }, [inputValue, zoom]);
+    setTasks((currentTasks) => {
+      const nextTasks = currentTasks.map((task) =>
+        task.id === activeTaskId
+          ? snapshotTask(task, inputValue, zoom, layout, selfRelationshipLabelOverrides)
+          : task,
+      );
+
+      saveTaskStore({
+        activeTaskId,
+        tasks: nextTasks,
+      });
+
+      return nextTasks;
+    });
+  }, [activeTaskId, inputValue, zoom, layout, selfRelationshipLabelOverrides]);
 
   const displayedLayout = layout
     ? (() => {
@@ -183,30 +467,145 @@ function App() {
       })()
     : null;
 
+  const createCurrentTaskSnapshot = () =>
+    tasks.map((task) =>
+      task.id === activeTaskId
+        ? snapshotTask(task, inputValue, zoom, layout, selfRelationshipLabelOverrides)
+        : task,
+    );
+
   const handleGenerate = () => {
     void applyParseResult(inputValue, "manual");
   };
 
   const handleLoadExample = () => {
     setInputValue(EXAMPLE_INPUT);
+    setLayout(null);
+    setDiagramModel(null);
+    setErrors([]);
+    setSelfRelationshipLabelOverrides({});
+    hydratedLayoutRef.current = null;
     setNotice("Example reloaded.");
   };
 
   const handleSaveDraft = () => {
-    const draft = saveDraftToStorage(inputValue, zoom);
-    setNotice(
-      draft
-        ? `Draft saved at ${formatSavedAt(draft.savedAt)}.`
-        : "Draft save failed in this browser.",
+    const timestamp = new Date().toISOString();
+    const nextTasks = createCurrentTaskSnapshot().map((task) =>
+      task.id === activeTaskId
+        ? {
+            ...snapshotTask(task, inputValue, zoom, layout, selfRelationshipLabelOverrides),
+            updatedAt: timestamp,
+          }
+        : task,
     );
+    const saved = saveTaskStore({
+      activeTaskId,
+      tasks: nextTasks,
+    });
+
+    setTasks(nextTasks);
+    setNotice(saved ? `Task saved at ${formatSavedAt(timestamp)}.` : "Task save failed in this browser.");
   };
 
   const handleClearDraft = () => {
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+    setInputValue("");
+    setDiagramModel(null);
+    setLayout(null);
+    setErrors([]);
+    setSelfRelationshipLabelOverrides({});
+    setZoom(1);
+    hydratedLayoutRef.current = null;
+    setNotice("Current task cleared. The empty task is saved locally.");
+  };
+
+  const handleCreateTask = () => {
+    const nextTask = createSavedTask("", tasks.length + 1);
+    const nextTasks = [nextTask, ...createCurrentTaskSnapshot()].slice(0, MAX_SAVED_TASKS);
+
+    setTasks(nextTasks);
+    setActiveTaskId(nextTask.id);
+    setInputValue(nextTask.inputValue);
+    setDiagramModel(null);
+    setLayout(null);
+    setErrors([]);
+    setSelfRelationshipLabelOverrides({});
+    setZoom(nextTask.zoom);
+    hydratedLayoutRef.current = null;
+    saveTaskStore({
+      activeTaskId: nextTask.id,
+      tasks: nextTasks,
+    });
+    setNotice("New local task created. Add entities and relationships to begin.");
+  };
+
+  const handleSelectTask = (taskId: string) => {
+    const snapshotTasks = createCurrentTaskSnapshot();
+    const nextTask = snapshotTasks.find((task) => task.id === taskId);
+
+    if (!nextTask || nextTask.id === activeTaskId) {
+      return;
     }
 
-    setNotice("Saved draft cleared. Current text is still on screen until you replace it.");
+    setActiveTaskId(nextTask.id);
+    setInputValue(nextTask.inputValue);
+    setDiagramModel(null);
+    setLayout(nextTask.layout);
+    setErrors([]);
+    setSelfRelationshipLabelOverrides(nextTask.selfRelationshipLabelOverrides);
+    setZoom(nextTask.zoom);
+    hydratedLayoutRef.current = nextTask.layout
+      ? {
+          taskId: nextTask.id,
+          source: nextTask.inputValue,
+        }
+      : null;
+    saveTaskStore({
+      activeTaskId: nextTask.id,
+      tasks: snapshotTasks,
+    });
+    setTasks(snapshotTasks);
+    setNotice(`Switched to "${nextTask.title}".`);
+  };
+
+  const handleDeleteTask = (taskId: string) => {
+    const snapshotTasks = createCurrentTaskSnapshot();
+
+    if (snapshotTasks.length === 1) {
+      handleClearDraft();
+      return;
+    }
+
+    const nextTasks = snapshotTasks.filter((task) => task.id !== taskId);
+    const nextActiveTask =
+      taskId === activeTaskId ? nextTasks[0] : snapshotTasks.find((task) => task.id === activeTaskId);
+
+    if (!nextActiveTask) {
+      return;
+    }
+
+    setTasks(nextTasks);
+
+    if (taskId === activeTaskId) {
+      setActiveTaskId(nextActiveTask.id);
+      setInputValue(nextActiveTask.inputValue);
+      setDiagramModel(null);
+      setLayout(nextActiveTask.layout);
+      setErrors([]);
+      setSelfRelationshipLabelOverrides(nextActiveTask.selfRelationshipLabelOverrides);
+      setZoom(nextActiveTask.zoom);
+      hydratedLayoutRef.current = nextActiveTask.layout
+        ? {
+            taskId: nextActiveTask.id,
+            source: nextActiveTask.inputValue,
+          }
+        : null;
+    }
+
+    saveTaskStore({
+      activeTaskId: nextActiveTask.id,
+      tasks: nextTasks,
+    });
+    setNotice("Local task deleted.");
   };
 
   const handleExportPng = async () => {
@@ -345,6 +744,14 @@ function App() {
       />
 
       <main className="workspace">
+        <TaskSidebar
+          tasks={tasks}
+          activeTaskId={activeTaskId}
+          onCreateTask={handleCreateTask}
+          onSelectTask={handleSelectTask}
+          onDeleteTask={handleDeleteTask}
+        />
+
         <TextInputPanel value={inputValue} onChange={setInputValue} />
 
         <section className="panel panel--preview">

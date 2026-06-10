@@ -3,28 +3,51 @@ interface TextInputPanelProps {
   onChange: (value: string) => void;
 }
 
-const syntaxLines = [
-  'Use "Entity: Name" or "WeakEntity: Name".',
-  'Use "Relationship: Name" or "IdentifyingRelationship: Name".',
-  'Add attributes with "- AttributeName" and markers like "(key)", "(partial-key)", "(multivalued)", "(derived)", "(composite)".',
-  'Relationships can use "- A -> B", self syntax like "- Employee -> Employee", or ternary syntax like "- A -> B -> C".',
-  'Preferred relationship syntax uses min/max ranges like "- left: 1..m", "- right: 0..1", or named ternary constraints like "- Library: 0..m".',
-  'Optional self-relationship role labels are supported with "- left role: Supervisor" and "- right role: Subordinate".',
-  'Backward compatibility still supports "- cardinality: 1:N" and older left/right participation + arrow lines.',
+const syntaxSections = [
+  {
+    title: "1. Define entities",
+    description: "Start each object with Entity or WeakEntity, then list its attributes below.",
+    example: "Entity: Library\n- LibraryID (key)\n- Name\n- Address",
+  },
+  {
+    title: "2. Mark attributes",
+    description: "Add simple markers in parentheses when an attribute needs Chen notation styling.",
+    example: "- Email\n- Address (composite)\n- PhoneNumber (multivalued)\n- Age (derived)",
+  },
+  {
+    title: "3. Connect entities",
+    description: "Use Relationship blocks for binary, ternary, and recursive relationships.",
+    example:
+      "Relationship: Registers\n- Library -> Member\n\nRelationship: Supervises\n- Employee -> Employee",
+  },
+  {
+    title: "4. Add constraints",
+    description: "Use min..max ranges. The renderer infers line weight and arrows automatically.",
+    example: "- left: 0..m\n- right: 1..1\n- left role: Supervisor\n- right role: Subordinate",
+  },
 ];
 
-const notationLines = [
-  "min = 0 draws a thin line; min = 1 draws a thick line.",
-  "max = 1 draws an arrow toward the relationship diamond; max = m draws no arrow.",
-  "0..m = thin line + no arrow.",
-  "1..m = thick line + no arrow.",
-  "0..1 = thin line + arrow.",
-  "1..1 = thick line + arrow.",
-  "Weak entity = double rectangle.",
-  "Identifying relationship = double diamond.",
-  "Multivalued attribute = double oval.",
-  "Derived attribute = dashed oval.",
-  "Partial key = dashed underline.",
+const constraintCards = [
+  {
+    value: "0..m",
+    meaning: "Optional many",
+    visual: "thin line, no arrow",
+  },
+  {
+    value: "1..m",
+    meaning: "Mandatory many",
+    visual: "thick line, no arrow",
+  },
+  {
+    value: "0..1",
+    meaning: "Optional one",
+    visual: "thin line, arrow",
+  },
+  {
+    value: "1..1",
+    meaning: "Mandatory one",
+    visual: "thick line, arrow",
+  },
 ];
 
 export function TextInputPanel({ value, onChange }: TextInputPanelProps) {
@@ -57,20 +80,34 @@ export function TextInputPanel({ value, onChange }: TextInputPanelProps) {
 
       <div className="helper-card">
         <h3>Syntax guide</h3>
-        <ul className="helper-list">
-          {syntaxLines.map((line) => (
-            <li key={line}>{line}</li>
+        <div className="syntax-guide">
+          {syntaxSections.map((section) => (
+            <article className="syntax-step" key={section.title}>
+              <h4>{section.title}</h4>
+              <p>{section.description}</p>
+              <pre className="syntax-example">
+                <code>{section.example}</code>
+              </pre>
+            </article>
           ))}
-        </ul>
+        </div>
       </div>
 
       <div className="helper-card">
-        <h3>Notation guide</h3>
-        <ul className="helper-list">
-          {notationLines.map((line) => (
-            <li key={line}>{line}</li>
+        <h3>Constraint cheat sheet</h3>
+        <div className="notation-grid">
+          {constraintCards.map((card) => (
+            <article className="notation-card" key={card.value}>
+              <strong>{card.value}</strong>
+              <span>{card.meaning}</span>
+              <small>{card.visual}</small>
+            </article>
           ))}
-        </ul>
+        </div>
+        <p className="helper-footnote">
+          Rule of thumb: min = 1 means total participation, rendered as a thicker line.
+          max = 1 adds an arrow toward the relationship diamond.
+        </p>
       </div>
     </section>
   );

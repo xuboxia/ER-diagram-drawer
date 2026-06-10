@@ -35,10 +35,10 @@ export function Toolbar({
           Load Example
         </button>
         <button className="button button--secondary" onClick={onSaveDraft}>
-          Save Draft
+          Save Task
         </button>
         <button className="button button--ghost" onClick={onClearDraft}>
-          Clear Draft
+          Clear Task
         </button>
       </div>
 
